@@ -1,0 +1,36 @@
+name: Watch upstream CEF
+on:
+  schedule:
+    - cron: '21 9 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Maintain one update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=$(python3 -c 'import json; print(json.load(open("pins.json"))["cef_branch"])')
+          pinned=$(python3 -c 'import json; print(json.load(open("pins.json"))["cef_commit"])')
+          latest=$(git ls-remote https://github.com/chromiumembedded/cef.git "refs/heads/$branch" | cut -f1)
+          test "${#latest}" -eq 40
+          if [ "$latest" = "$pinned" ]; then exit 0; fi
+          title="CEF upstream update available"
+          body="Pinned CEF: $pinned
+          Branch $branch head: $latest
+
+          Review compatibility, patch applicability, native builds, runtime tests, and coordinated cef-rs upgrades before changing pins or publishing. Milestone upgrades require an explicit decision."
+          number=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null and .title == "CEF upstream update available") | .number' | head -n 1)
+          if [ -n "$number" ]; then
+            gh api -X PATCH "repos/$GH_REPO/issues/$number" -f body="$body" > /dev/null
+          else
+            gh api "repos/$GH_REPO/issues" -f title="$title" -f body="$body" > /dev/null
+          fi

@@ -1,0 +1,26 @@
+name: Manual native build
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Runner operating system
+        type: choice
+        options: [Linux, macOS, Windows]
+        required: true
+      arch:
+        description: Native architecture
+        type: choice
+        options: [x64, arm64]
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.ref == 'refs/heads/master'
+    runs-on: [self-hosted, "${{ inputs.os }}", "${{ inputs.arch }}", cef-build]
+    timeout-minutes: 1440
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build in a unique dedicated directory
+        shell: bash
+        run: python3 scripts/cef.py build --directory "$RUNNER_TEMP/cef-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --arch "${{ inputs.arch }}"

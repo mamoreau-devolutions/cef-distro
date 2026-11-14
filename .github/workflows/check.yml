@@ -1,0 +1,20 @@
+name: Patch checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  patches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check patch applicability against pinned sources
+        run: python3 scripts/cef.py check-patches
+      - name: Check orchestration
+        run: python3 -m unittest discover -s tests -v
+      - name: Hosted runner capacity
+        run: |
+          df -h .
+          free -h
