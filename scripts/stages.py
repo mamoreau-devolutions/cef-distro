@@ -30,7 +30,7 @@ def render():
         "        required: true",
         "      stage-minutes:",
         "        type: string",
-        "        default: \"295\"",
+        "        default: \"280\"",
         "permissions:",
         "  contents: read",
         "jobs:",

@@ -18,7 +18,7 @@ inputs:
   budget-minutes:
     description: Minutes after job start at which ninja is stopped gracefully
     required: false
-    default: "295"
+    default: "280"
 outputs:
   complete:
     description: Whether every build target finished in this stage

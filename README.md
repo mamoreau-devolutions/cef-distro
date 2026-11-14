@@ -47,7 +47,7 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
 - `targets`: JSON list from `linux-x64`, `linux-arm64`, `windows-x64`,
   `windows-arm64`, `macos-x64`, `macos-arm64` (default: all six).
 - `publish`: create one prerelease when every requested target succeeds.
-- `stage-minutes`: build time per stage (default 295; lower only to test
+- `stage-minutes`: build time per stage (default 280; lower only to test
   resumption).
 
 A Chromium build takes far longer than the 6-hour hosted job limit, so each

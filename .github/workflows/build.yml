@@ -13,7 +13,7 @@ on:
       stage-minutes:
         description: Minutes each stage builds before saving the tree (lower only to test resumption)
         type: string
-        default: "295"
+        default: "280"
 permissions:
   contents: read
 concurrency:
