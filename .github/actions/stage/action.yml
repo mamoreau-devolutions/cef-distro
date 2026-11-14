@@ -149,6 +149,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        df -h "$CEF_TREE" || true
         python scripts/cef.py pack --directory "$CEF_TREE" --output "$CEF_PARTS/out"
         ls -la "$CEF_PARTS/out"
 

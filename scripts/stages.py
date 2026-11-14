@@ -28,6 +28,9 @@ def render():
         "      target:",
         "        type: string",
         "        required: true",
+        "      stage-minutes:",
+        "        type: string",
+        "        default: \"295\"",
         "permissions:",
         "  contents: read",
         "jobs:",
@@ -50,6 +53,7 @@ def render():
             "          target: ${{ inputs.target }}",
             f"          stage: \"{stage}\"",
             f"          previous: \"{stage - 1 if stage > 1 else ''}\"",
+            "          budget-minutes: ${{ inputs.stage-minutes }}",
         ]
     needs = ", ".join(f"s{stage}" for stage in range(1, STAGES + 1))
     lines += [

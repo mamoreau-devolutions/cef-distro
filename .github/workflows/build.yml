@@ -10,6 +10,10 @@ on:
         description: Publish a prerelease when every requested target succeeds
         type: boolean
         default: true
+      stage-minutes:
+        description: Minutes each stage builds before saving the tree (lower only to test resumption)
+        type: string
+        default: "295"
 permissions:
   contents: read
 concurrency:
@@ -26,6 +30,7 @@ jobs:
     uses: ./.github/workflows/build-target.yml
     with:
       target: ${{ matrix.target }}
+      stage-minutes: ${{ inputs.stage-minutes }}
 
   release:
     needs: build
