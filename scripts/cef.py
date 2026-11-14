@@ -134,8 +134,10 @@ def build_env(target):
 
 def ninja_targets(target):
     platform = TARGETS[target][0]
-    return ["cefclient"] + {"linux": ["chrome_sandbox"],
-                            "windows": ["bootstrap", "bootstrapc"]}.get(platform, [])
+    # macOS make_distrib copies the framework out of cefclient.app; Linux sysroot
+    # builds disable GTK (cef_use_gtk=false), so use cefsimple as CEF recommends.
+    return {"linux": ["cefsimple", "chrome_sandbox"],
+            "windows": ["cefclient", "bootstrap", "bootstrapc"]}.get(platform, ["cefclient"])
 
 
 def layout(directory):

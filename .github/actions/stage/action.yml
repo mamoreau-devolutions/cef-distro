@@ -71,6 +71,10 @@ runs:
           /Library/Developer/CoreSimulator ~/Library/Developer/CoreSimulator || true
         xcodebuild -version
         xcrun --sdk macosx --show-sdk-version
+        # Xcode 26 ships without the Metal toolchain that ANGLE's shader build needs.
+        xcrun --find metal >/dev/null 2>&1 && xcrun metal --version >/dev/null 2>&1 || \
+          xcodebuild -downloadComponent MetalToolchain
+        xcrun metal --version
         df -h /
 
     - name: Prepare Windows toolchain

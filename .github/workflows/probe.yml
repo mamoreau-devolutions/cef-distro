@@ -37,6 +37,18 @@ jobs:
           xcodebuild -showsdks | grep -i macos || true
           du -sh /Applications/Xcode* 2>/dev/null || true
           du -sh ~/Library/Android /Library/Developer/CoreSimulator /Users/runner/hostedtoolcache 2>/dev/null || true
+      - name: Metal toolchain
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          xcode=$(ls -d /Applications/Xcode_26.*.app | sort -V | tail -1)
+          sudo xcode-select --switch "$(cd -P "$xcode" && pwd)"
+          xcrun --find metal >/dev/null 2>&1 && xcrun metal --version >/dev/null 2>&1 || \
+            xcodebuild -downloadComponent MetalToolchain
+          xcrun metal --version
+          printf 'kernel void k(device float* a [[buffer(0)]]) { a[0] = 1; }\n' > k.metal
+          xcrun metal -c k.metal -o k.air --std=macos-metal2.1 -mmacosx-version-min=10.14
+          ls -la k.air
       - name: Windows toolchains
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,26 +1,33 @@
 # Patched CEF for IronRDP
 
-This repository holds patches, not a CEF fork. **No binary release has been
-produced or validated here yet.** The manual build and draft-release workflow
-is an initial, unverified integration. It never publishes a release.
-Only the upstream IronRDP custom build on macOS ARM64 is documented as
-validated; Linux and Windows patched runtimes remain unverified.
+This repository holds ordered patches and build automation, not a CEF fork.
+GitHub Actions builds pinned upstream CEF/Chromium with the IronRDP patches on
+free GitHub-hosted runners and publishes the unmodified CEF `--minimal`
+distributions as GitHub prereleases for a cef-rs fork to consume.
+
+CI verifies patch identity, pinned checkouts and the patched `libcef`
+exports. **It does not validate runtime behavior.** Only the upstream IronRDP
+custom build on macOS ARM64 has been validated at runtime; run IronRDP's
+native tests (`e2e.py`, `clipboard.py`, `devices.py`, `shutdown.py`) before
+relying on any other platform.
 
 ## Pins and provenance
 
 `pins.json` records the immutable CEF, Chromium, depot_tools, cef-rs and
-IronRDP revisions. CEF's pinned `CHROMIUM_BUILD_COMPATIBILITY.txt` specifies
-Chromium `refs/tags/156.0.8078.88` and depot_tools
-`132599ebbd8d22d1b1bd5ea703a6d3bc493edd71`. The pinned cef-rs workspace version
-is `156.4.0+156.0.26`, corresponding to CEF
-`156.0.26+g8ea0c73+chromium-156.0.8078.88`.
-The Chromium tag resolves to `8954d18543712dc11b97c3aca0a6e714aa2d7dcd`.
+IronRDP revisions, plus the Git blob of CEF's `automate-git.py`:
 
-The five unchanged patches match the `ironrdp-browser` branch and come from
-[IronRDP server/cef/patches at 692c34cf](https://github.com/Devolutions/IronRDP/tree/692c34cf429a704f7bc5d99188b5be6b961043d7/server/cef/patches).
-IronRDP is licensed under MIT or Apache-2.0; the corresponding license texts
-are included. `scripts/cef.py` verifies their original Git blob identities.
-Update those identities deliberately when changing patches.
+- CEF branch `8078` at `8ea0c73b5dbed1389c8dafb911a98c41246bb8cb`
+  (`156.0.26+g8ea0c73+chromium-156.0.8078.88`).
+- Chromium `refs/tags/156.0.8078.88` = `8954d18543712dc11b97c3aca0a6e714aa2d7dcd`,
+  checked against CEF's `CHROMIUM_BUILD_COMPATIBILITY.txt`.
+- depot_tools `132599ebbd8d22d1b1bd5ea703a6d3bc493edd71`.
+- cef-rs `9aa78c450489eddb828eb982eaee6c104a89d348` (`156.4.0+156.0.26`).
+
+The five unchanged patches come from
+[IronRDP `ironrdp-browser` server/cef/patches at 692c34cf](https://github.com/Devolutions/IronRDP/tree/692c34cf429a704f7bc5d99188b5be6b961043d7/server/cef/patches).
+IronRDP is licensed under MIT or Apache-2.0; both license texts are included.
+`scripts/cef.py` verifies their Git blob identities; update those deliberately
+when changing patches.
 
 | Order | Tree | Patch |
 | --- | --- | --- |
@@ -30,76 +37,98 @@ Update those identities deliberately when changing patches.
 | 4 | Chromium | `in-process-audio-shutdown.patch` |
 | 5 | Chromium, POSIX only | `disable-chromium-shutdown-signals.patch` |
 
-`python3 scripts/cef.py check-patches` downloads only the touched pinned
-upstream files, verifies patch identities and applies all patches in order.
-This does not simulate CEF's own Chromium patches, compile CEF, check exports,
-or validate runtime behavior. The Actions exporter smoke test uses a synthetic
-Linux archive to check flattening and metadata; it is not a native CEF build.
+`python3 scripts/cef.py check-patches` (run by the `Check` workflow) fetches
+only the touched pinned upstream files and applies all patches in order.
 
-## Build (manual, experimental)
+## Building in GitHub Actions
 
-Use an isolated, trusted native machine following the
-[pinned CEF automated build requirements](https://github.com/chromiumembedded/cef/blob/8ea0c73b5dbed1389c8dafb911a98c41246bb8cb/docs/automated_build_setup.md):
-at least 16 GiB RAM and 200 GiB free disk, plus the platform toolchain and
-dependencies. Chromium builds can require substantially more. Do not use a
-standard hosted runner or run a checkout on a shared machine.
+Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
 
-The `Manual native build` workflow requires an explicitly provisioned
-self-hosted runner with labels `cef-build`, OS (`Linux`, `macOS`, or `Windows`)
-and native architecture (`x64` or `arm64`), and Python 3, Git, and `nm` (or
-Visual Studio's `dumpbin` on Windows) on PATH.
-Provision no runner for untrusted PRs. It runs only when manually dispatched
-against `master`; it is not automatically dispatched by pushes or PRs.
-Alternatively run on a prepared native host:
+- `targets`: JSON list from `linux-x64`, `linux-arm64`, `windows-x64`,
+  `windows-arm64`, `macos-x64`, `macos-arm64` (default: all six).
+- `publish`: create one prerelease when every requested target succeeds.
+- `stage-minutes`: build time per stage (default 295; lower only to test
+  resumption).
+
+A Chromium build takes far longer than the 6-hour hosted job limit, so each
+target runs as a chain of resumable stages generated by `scripts/stages.py`
+into `build-target.yml` (regenerate with `python scripts/stages.py`):
+
+1. **Stage 1** clones depot_tools at its pin and bootstraps it, runs the pinned
+   `automate-git.py --no-build --no-distrib` (verified by blob hash) without
+   Chromium history, verifies all three checkouts, applies the patches, then
+   runs CEF's `gclient_hook.py` so CEF's own patches and `gn gen` follow ours.
+2. **Every stage** runs ninja (`cefclient`, plus `chrome_sandbox` on Linux and
+   `bootstrap`/`bootstrapc` on Windows) until its deadline, then stops it
+   gracefully so its log stays consistent.
+3. **Unfinished** stages save the whole tree as split tar+zstd artifacts that
+   preserve nanosecond mtimes (Python `tarfile` on Windows, where the system
+   bsdtar crashes on Chromium trees); the next stage restores them at the same
+   absolute path and ninja resumes.
+4. **The finishing** stage runs `make_distrib.py --minimal`, then
+   `scripts/release.py` checks the standard archive name and top-level
+   directory, and verifies the 14 patched exports in `libcef`. The candidate
+   archive, `SHA256SUMS` and `manifest.json` are uploaded.
+5. The **release** job re-verifies checksums and commits and publishes a
+   prerelease tagged `cef-<cef version>-patched.<run number>`.
+
+Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
+`windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and
+`macos-15-intel` (newest Xcode 26). The build is an official configuration
+without ThinLTO, PGO, CFI or symbols (`GN_COMMON` in `scripts/cef.py`), which
+keeps links within hosted memory; no codec or branding flags are set. A full
+six-target build takes roughly 15–25 hours and needs only a public repository's
+free minutes. Tree artifacts (~13 GB per stage) are kept for 3 days and
+candidates for 14 days.
+
+Locally, on a native trusted machine with at least 16 GiB RAM and 200 GiB free
+disk (see CEF's
+[automated build setup](https://github.com/chromiumembedded/cef/blob/8ea0c73b5dbed1389c8dafb911a98c41246bb8cb/docs/automated_build_setup.md)):
 
 ```sh
-python3 scripts/cef.py build --directory /path/to/new/owned/build-directory --arch arm64
+python3 scripts/cef.py sync --directory /new/owned/dir --target linux-x64
+python3 scripts/cef.py build --directory /new/owned/dir --target linux-x64
+python3 scripts/cef.py distrib --directory /new/owned/dir --target linux-x64
 ```
 
-The directory must not exist and its parent must exist. It is never cleaned or
-reused. The script verifies the downloaded pinned automation script's Git blob,
-syncs without building, verifies all three checkouts, applies patches, then
-forces CEF's build/distribution step and GN regeneration without updating.
-The output should be in `chromium/src/cef/binary_distrib`; inspect and test it
-before distribution.
+The directory must not already exist; it is never cleaned or reused.
 
-After a build, the workflow checks the expected custom library exports and
-standard archive name, then creates a **draft** GitHub Release containing
-the original archive, `SHA256SUMS`, and `manifest.json` with upstream pins,
-repository revision and patch identities. Each platform run creates its own
-unique draft. Export checks are not runtime validation: review and test each
-candidate before publishing. The draft is created in a separate hosted job;
-the trusted build runner does not receive release-write permission. These
-steps have not yet been exercised on a suitably provisioned runner. CEF and
-Chromium may change files during their own patching; a lightweight source check
-is not sufficient proof that a complete build will succeed.
+## Consuming a release from a cef-rs fork
 
-## Consumption and release gate
+Each release contains, per target, the original
+`cef_binary_<version>_<platform>_minimal.tar.bz2`, `manifest-<target>.json`
+(upstream pins, repository commit, patch identities, archive SHA-256) and a
+combined `SHA256SUMS`.
 
-An ordinary CEF `binary_distrib` directory is **not** a cef-rs `CEF_PATH`.
-Use `export-cef-dir` built from pinned
-[cef-rs](https://github.com/tauri-apps/cef-rs/tree/9aa78c450489eddb828eb982eaee6c104a89d348/export-cef-dir)
-with the standard-named minimal `.tar.bz2`, e.g.
-`export-cef-dir --archive <archive> --target <rust-target> <new-output-dir>`.
-Keep the canonical archive basename and top-level directory. Export creates
-the flattened layout and `archive.json`; use a separate path per patched
-release and set `CEF_PATH` to that output. Invalid or too-new `archive.json`
-can cause this cef-rs revision to download **stock CEF** instead. Never infer
-patch identity from CEF's API hash or `archive.json`; verify the custom exports
-and record the patch revision and artifact checksum separately. The IronRDP
-server rejects stock CEF at startup.
+An unpacked `binary_distrib` is **not** a cef-rs `CEF_PATH`. Download the
+archive, verify `SHA256SUMS`, keep its canonical basename, then use
+`export-cef-dir` from pinned
+[cef-rs](https://github.com/tauri-apps/cef-rs/tree/9aa78c450489eddb828eb982eaee6c104a89d348/export-cef-dir):
 
-On macOS, the pinned cef-rs exporter/consumer copies regular files but not
-framework symlinks. A production integration must materialize and validate
-the framework layout without losing sandbox/bootstrap resources. Smoke-test
-the exported directory and IronRDP `package-cef` on each native target, then
-run the upstream `e2e.py`, `clipboard.py`, `devices.py`, and `shutdown.py`
-tests as applicable. Coordinate any cef-rs/CEF upgrade with the consumer.
-Do not publish until these checks and patch-specific exports are verified.
+```sh
+export-cef-dir --archive cef_binary_..._linux64_minimal.tar.bz2 \
+  --target x86_64-unknown-linux-gnu /path/per/patched/release
+export CEF_PATH=/path/per/patched/release
+```
+
+This flattens `Release`/`Resources` and writes `archive.json` (the `Check`
+workflow smoke-tests it with a synthetic archive). A cef-rs fork can instead
+download from the release URL in its build script; either way:
+
+- Use a distinct `CEF_PATH` or cache directory per patched release. An invalid
+  or too-new `archive.json` makes this cef-rs revision silently download
+  **stock** CEF; IronRDP rejects stock CEF at startup.
+- Never infer patch identity from CEF's API hash or `archive.json`; use the
+  manifest's patch identities and archive checksum.
+- On macOS, this cef-rs revision copies framework files but not symlinks; the
+  fork must preserve or recreate the framework layout and sandbox/bootstrap
+  resources.
+- Upgrade cef-rs and these pins together.
 
 ## Updates
 
-The daily watcher compares the pinned release branch head with the pinned CEF
-revision and maintains one open issue for review. It does not update pins,
-create PRs, trigger builds, or ship binaries. Milestone upgrades require an
-explicit decision and coordinated consumer changes.
+The daily `Watch` workflow compares the pinned release branch head with the
+pinned CEF revision and keeps one open issue for review. It never updates pins,
+opens PRs, triggers builds or ships binaries. Updating means editing
+`pins.json` (and patch identities if patches change), then dispatching a build.
+Milestone upgrades need an explicit decision and coordinated consumer changes.
