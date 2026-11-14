@@ -61,9 +61,11 @@ runs:
       run: |
         set -euo pipefail
         xcode=$(ls -d /Applications/Xcode_26.*.app | sort -V | tail -1)
+        xcode=$(cd -P "$xcode" && pwd)
         sudo xcode-select --switch "$xcode"
+        # Remove other Xcodes for disk space; versioned names are often symlinks.
         for other in /Applications/Xcode*.app; do
-          if [ "$other" != "$xcode" ] && [ ! -L "$other" ]; then sudo rm -rf "$other"; fi
+          if [ ! -L "$other" ] && [ "$(cd -P "$other" && pwd)" != "$xcode" ]; then sudo rm -rf "$other"; fi
         done
         sudo rm -rf ~/Library/Android /usr/local/share/dotnet ~/.dotnet \
           /Library/Developer/CoreSimulator ~/Library/Developer/CoreSimulator || true

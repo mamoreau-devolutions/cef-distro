@@ -13,7 +13,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ inputs.targets }}
   cancel-in-progress: false
 jobs:
   build:
