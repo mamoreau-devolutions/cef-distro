@@ -282,8 +282,9 @@ def pack(directory, output, part_size):
             chunk = chunk[len(take):]
     if part:
         part.close()
-    if compress.wait() or tar.wait():
-        raise RuntimeError("Failed to pack the build tree")
+    codes = (tar.wait(), compress.wait())
+    if any(codes):
+        raise RuntimeError(f"Failed to pack the build tree (tar={codes[0]}, zstd={codes[1]})")
     print(f"Packed {directory} into {index} parts", flush=True)
 
 
@@ -301,8 +302,9 @@ def unpack(parts, directory):
             shutil.copyfileobj(stream, decompress.stdin, 8 * 1024 * 1024)
         path.unlink()
     decompress.stdin.close()
-    if decompress.wait() or tar.wait():
-        raise RuntimeError("Failed to unpack the build tree")
+    codes = (decompress.wait(), tar.wait())
+    if any(codes):
+        raise RuntimeError(f"Failed to unpack the build tree (zstd={codes[0]}, tar={codes[1]})")
 
 
 def write_output(name, value):
