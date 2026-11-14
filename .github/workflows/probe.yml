@@ -1,0 +1,49 @@
+name: Probe hosted runners
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-2022, windows-11-arm, macos-15, macos-26, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Capacity
+        shell: bash
+        run: |
+          uname -a || true
+          python3 --version || python --version
+          nproc 2>/dev/null || sysctl -n hw.ncpu || true
+          df -h || true
+          free -g || true
+          sysctl -n hw.memsize hw.ncpu 2>/dev/null || true
+          which tar zstd 7z xz pigz || true
+          tar --version | head -1 || true
+      - name: macOS toolchains
+        if: runner.os == 'macOS'
+        run: |
+          sw_vers
+          ls -d /Applications/Xcode* || true
+          xcode-select -p
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i macos || true
+          du -sh /Applications/Xcode* 2>/dev/null || true
+          du -sh ~/Library/Android /Library/Developer/CoreSimulator /Users/runner/hostedtoolcache 2>/dev/null || true
+      - name: Windows toolchains
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_ComputerSystem | Select TotalPhysicalMemory, NumberOfLogicalProcessors
+          Get-PSDrive -PSProvider FileSystem | Select Name, Used, Free
+          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Include' -ErrorAction SilentlyContinue | Select Name
+          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -ErrorAction SilentlyContinue | Select Name
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -format text | Select-String 'installationPath|catalog_productDisplayVersion|displayName'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Get-ChildItem "$vs\VC\Tools\MSVC" | Select Name
+          Get-ChildItem "$vs\VC\Tools\MSVC\*\lib" | Select FullName
+          Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\*" -Directory | Select FullName
+          Get-Command 7z, tar, zstd -ErrorAction SilentlyContinue | Select Source
