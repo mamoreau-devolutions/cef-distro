@@ -177,9 +177,19 @@ def sync(directory, target):
     automate.write_bytes(script)
     arch = TARGETS[target][1]
     env = environment(directory, target)
+    # Bootstrap depot_tools at its pinned revision; automate then never updates it.
+    depot_tools = layout(directory)["depot_tools"]
+    run("git", "clone", "--quiet", "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+        str(depot_tools))
+    run("git", "-C", str(depot_tools), "checkout", "--quiet", PINS["depot_tools_commit"])
+    if os.name == "nt":
+        run("cmd", "/c", str(depot_tools / "bootstrap" / "win_tools.bat"), cwd=depot_tools, env=env)
+    else:
+        run("bash", str(depot_tools / "ensure_bootstrap"), cwd=depot_tools, env=env)
     run(sys.executable, str(automate), "--download-dir", str(directory),
         "--branch", PINS["cef_branch"], "--checkout", PINS["cef_commit"],
-        "--no-chromium-history", f"--{arch}-build", "--no-build", "--no-distrib", env=env)
+        "--no-depot-tools-update", "--no-chromium-history", f"--{arch}-build",
+        "--no-build", "--no-distrib", env=env)
     verify_checkouts(directory)
     paths = layout(directory)
     apply_patches(paths["cef"], paths["src"], TARGETS[target][0] != "windows")
