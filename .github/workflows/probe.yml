@@ -41,15 +41,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-CimInstance Win32_ComputerSystem | Select TotalPhysicalMemory, NumberOfLogicalProcessors | Format-Table -AutoSize | Out-String -Width 300
-          Get-PSDrive -PSProvider FileSystem | Select Name, Used, Free | Format-Table -AutoSize | Out-String -Width 300
-          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Include' -ErrorAction SilentlyContinue | Select Name | Format-Table -AutoSize | Out-String -Width 300
-          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -ErrorAction SilentlyContinue | Select Name | Format-Table -AutoSize | Out-String -Width 300
+          Get-CimInstance Win32_ComputerSystem | Select TotalPhysicalMemory, NumberOfLogicalProcessors | Format-Table -AutoSize | Out-String -Width 300
+          Get-PSDrive -PSProvider FileSystem | Select Name, Used, Free | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Include' -ErrorAction SilentlyContinue | Select Name | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -ErrorAction SilentlyContinue | Select Name | Format-Table -AutoSize | Out-String -Width 300
           & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -format text | Select-String 'installationPath|catalog_productDisplayVersion|displayName'
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Get-ChildItem "$vs\VC\Tools\MSVC" | Select Name | Format-Table -AutoSize | Out-String -Width 300
-          Get-ChildItem "$vs\VC\Tools\MSVC\*\lib" | Select FullName | Format-Table -AutoSize | Out-String -Width 300
-          Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\*" -Directory | Select FullName | Format-Table -AutoSize | Out-String -Width 300
-          Get-Command 7z, tar, zstd -ErrorAction SilentlyContinue | Select Source | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem "$vs\VC\Tools\MSVC" | Select Name | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem "$vs\VC\Tools\MSVC\*\lib" | Select FullName | Format-Table -AutoSize | Out-String -Width 300
+          Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\*" -Directory | Select FullName | Format-Table -AutoSize | Out-String -Width 300
+          Get-Command 7z, tar, zstd -ErrorAction SilentlyContinue | Select Source | Format-Table -AutoSize | Out-String -Width 300
           & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -include packages -format json | ConvertFrom-Json | % { $_.displayName; $_.packages.id | ? { $_ -match 'Windows11SDK|Windows10SDK|ARM64|ATL|MFC|VC.Tools' } }
           reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\Microsoft SDKs\Windows\v10.0" /v ProductVersion
