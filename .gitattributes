@@ -1,2 +1,2 @@
-# Patch files are provenance-checked byte-for-byte, including line endings.
+* text=auto eol=lf
 *.patch -text

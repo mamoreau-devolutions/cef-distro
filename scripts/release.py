@@ -6,6 +6,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -32,7 +33,36 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def verify_exports(archive, platform):
+def pe_exports(data):
+    """Return exported names from a PE32/PE32+ image."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    if data[pe:pe + 4] != b"PE\0\0":
+        raise ValueError("Not a PE image")
+    sections, optional_size = struct.unpack_from("<H12xH", data, pe + 6)
+    optional = pe + 24
+    magic = struct.unpack_from("<H", data, optional)[0]
+    directories = optional + {0x10B: 96, 0x20B: 112}[magic]
+    export_rva = struct.unpack_from("<I", data, directories)[0]
+    table = optional + optional_size
+    ranges = [struct.unpack_from("<8xIIII", data, table + 40 * i) for i in range(sections)]
+
+    def offset(rva):
+        for virtual_size, address, raw_size, pointer in ranges:
+            if address <= rva < address + max(virtual_size, raw_size):
+                return rva - address + pointer
+        raise ValueError(f"RVA outside sections: {rva:#x}")
+
+    if not export_rva:
+        return []
+    count, names = struct.unpack_from("<24xI4xI", data, offset(export_rva))
+    result = []
+    for index in range(count):
+        start = offset(struct.unpack_from("<I", data, offset(names) + 4 * index)[0])
+        result.append(data[start:data.index(b"\0", start)].decode("ascii"))
+    return result
+
+
+def verify_exports(archive, platform, nm="nm"):
     root = archive.name.removesuffix(".tar.bz2")
     library = {"linux": "libcef.so", "windows": "libcef.dll",
                "macos": "Chromium Embedded Framework"}[platform]
@@ -50,10 +80,12 @@ def verify_exports(archive, platform):
             binary = Path(temp) / library
             with tar.extractfile(candidates[0]) as source, binary.open("wb") as target:
                 shutil.copyfileobj(source, target)
-            command = (["dumpbin", "/exports", str(binary)] if platform == "windows"
-                       else ["nm", "-gU", str(binary)] if platform == "macos"
-                       else ["nm", "-D", "--defined-only", str(binary)])
-            output = subprocess.check_output(command, text=True, errors="replace")
+            if platform == "windows":
+                output = "\n".join(pe_exports(binary.read_bytes()))
+            else:
+                command = ([nm, "-g", "--defined-only", str(binary)] if platform == "macos"
+                           else [nm, "-D", "--defined-only", str(binary)])
+                output = subprocess.check_output(command, text=True, errors="replace")
     missing = [name for name in EXPORTS if not re.search(
         rf"(?<![A-Za-z0-9_])_?{name}(?![A-Za-z0-9_])", output)]
     if missing:
@@ -73,7 +105,9 @@ def prepare(build, output, platform, arch, revision):
         raise FileNotFoundError(f"Expected standard-named minimal archive: {archive}")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Expected a full repository commit SHA")
-    verify_exports(archive, platform)
+    # Chromium's llvm-nm reads cross-compiled binaries regardless of host architecture.
+    llvm_nm = build / "chromium" / "src" / "third_party" / "llvm-build" / "Release+Asserts" / "bin" / "llvm-nm"
+    verify_exports(archive, platform, str(llvm_nm) if llvm_nm.is_file() else "nm")
     output.mkdir()
     target = output / name
     shutil.copyfile(archive, target)

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Verify patches against pinned source or build in a new, dedicated directory."""
+"""Verify patches and build patched CEF in resumable stages."""
 import argparse
 import ast
-import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,27 +31,9 @@ PATCH_BLOBS = {
 }
 
 
-def physical_memory():
-    if sys.platform == "win32":
-        class MemoryStatus(ctypes.Structure):
-            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
-                        ("total", ctypes.c_ulonglong), ("available", ctypes.c_ulonglong),
-                        ("total_page", ctypes.c_ulonglong), ("available_page", ctypes.c_ulonglong),
-                        ("total_virtual", ctypes.c_ulonglong), ("available_virtual", ctypes.c_ulonglong),
-                        ("available_extended", ctypes.c_ulonglong)]
-        status = MemoryStatus()
-        status.length = ctypes.sizeof(status)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            raise ctypes.WinError()
-        return status.total
-    if sys.platform == "darwin":
-        return int(subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True))
-    return os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
-
-
-def run(*args, cwd=None):
+def run(*args, cwd=None, env=None):
     print("+", *map(str, args), flush=True)
-    subprocess.run(args, cwd=cwd, check=True)
+    subprocess.run(args, cwd=cwd, env=env, check=True)
 
 
 def download(url):
@@ -115,73 +98,242 @@ def git_blob(data):
     return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
 
 
-def build(directory, arch):
+
+TARGETS = {
+    "linux-x64": ("linux", "x64"), "linux-arm64": ("linux", "arm64"),
+    "windows-x64": ("windows", "x64"), "windows-arm64": ("windows", "arm64"),
+    "macos-x64": ("macos", "x64"), "macos-arm64": ("macos", "arm64"),
+}
+HOST_PLATFORM = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
+# Official configuration without ThinLTO, PGO, CFI, or symbols keeps the link
+# within hosted-runner memory and time limits. No codec or branding flags.
+GN_COMMON = ("is_official_build=true", "use_thin_lto=false", "chrome_pgo_phase=0",
+             "symbol_level=0", "use_siso=false")
+
+
+def build_env(target):
+    platform, arch = TARGETS[target]
+    if platform != HOST_PLATFORM:
+        raise ValueError(f"{target} must be built on {platform}, not {HOST_PLATFORM}")
+    gn = list(GN_COMMON)
+    env = {"GN_OUT_CONFIGS": f"Release_GN_{arch}", "CEF_ARCHIVE_FORMAT": "tar.bz2",
+           "DEPOT_TOOLS_UPDATE": "0"}
+    if platform == "linux":
+        gn += ["use_sysroot=true", "is_cfi=false"]
+        if arch == "arm64":
+            env["CEF_INSTALL_SYSROOT"] = "arm64"
+    elif platform == "windows":
+        env["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"
+    if platform != "linux":
+        env["CEF_ENABLE_ARM64" if arch == "arm64" else "CEF_ENABLE_AMD64"] = "1"
+    env["GN_DEFINES"] = " ".join(gn)
+    return env
+
+
+def ninja_targets(target):
+    platform = TARGETS[target][0]
+    return ["cefclient"] + {"linux": ["chrome_sandbox"],
+                            "windows": ["bootstrap", "bootstrapc"]}.get(platform, [])
+
+
+def layout(directory):
+    src = directory / "chromium" / "src"
+    return {"src": src, "cef": src / "cef", "depot_tools": directory / "depot_tools"}
+
+
+def environment(directory, target):
+    env = dict(os.environ)
+    env.update(build_env(target))
+    env["PATH"] = str(layout(directory)["depot_tools"]) + os.pathsep + env["PATH"]
+    return env
+
+
+def head(path):
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+
+
+def verify_checkouts(directory):
+    paths = layout(directory)
+    for name, path, expected in (("CEF", paths["cef"], PINS["cef_commit"]),
+                                 ("Chromium", paths["src"], PINS["chromium_commit"]),
+                                 ("depot_tools", paths["depot_tools"], PINS["depot_tools_commit"])):
+        actual = head(path)
+        if actual != expected:
+            raise ValueError(f"Unexpected {name} checkout: {actual}")
+
+
+def sync(directory, target):
+    """Fetch pinned sources, apply patches, and generate the build directory."""
     verify_patch_identity()
     if directory.exists():
         raise ValueError(f"Build directory must not already exist: {directory}")
-    if shutil.disk_usage(directory.parent).free < 200 * 1024**3:
-        raise ValueError("At least 200 GiB free disk is required")
-    if physical_memory() < 16 * 1024**3:
-        raise ValueError("At least 16 GiB physical memory is required")
     verify_compatibility()
-    directory.mkdir()
-    url = ("https://raw.githubusercontent.com/chromiumembedded/cef/"
-           f"{PINS['cef_commit']}/tools/automate/automate-git.py")
-    script = download(url)
+    directory.mkdir(parents=True)
+    script = download("https://raw.githubusercontent.com/chromiumembedded/cef/"
+                      f"{PINS['cef_commit']}/tools/automate/automate-git.py")
     if git_blob(script) != PINS["automate_git_blob"]:
         raise ValueError("Pinned automate-git.py blob does not match")
     automate = directory / "automate-git.py"
     automate.write_bytes(script)
-    os.environ.setdefault("CEF_ARCHIVE_FORMAT", "tar.bz2")
-    if sys.platform.startswith("linux"):
-        gn = "is_official_build=true use_sysroot=true symbol_level=1 is_cfi=false"
-        if arch == "arm64":
-            gn += " use_thin_lto=false chrome_pgo_phase=0"
-            os.environ.setdefault("CEF_INSTALL_SYSROOT", "arm64")
-        os.environ.setdefault("GN_DEFINES", gn)
-    else:
-        gn = "is_official_build=true"
-        if sys.platform == "win32" and arch == "arm64":
-            gn += " use_thin_lto=false chrome_pgo_phase=0"
-            os.environ.setdefault("CEF_ENABLE_ARM64", "1")
-        os.environ.setdefault("GN_DEFINES", gn)
-    common = [sys.executable, str(automate), "--download-dir", str(directory),
-              "--branch", PINS["cef_branch"], "--checkout", PINS["cef_commit"],
-              "--no-chromium-history", f"--{arch}-build"]
-    if arch == "x64" or sys.platform == "darwin":
-        common.append("--with-pgo-profiles")
-    run(*common, "--no-build", "--no-distrib")
-    cef = directory / "chromium" / "src" / "cef"
-    chromium = directory / "chromium" / "src"
-    actual_cef = subprocess.check_output(["git", "-C", str(cef), "rev-parse", "HEAD"], text=True).strip()
-    if actual_cef != PINS["cef_commit"]:
-        raise ValueError(f"Unexpected CEF checkout: {actual_cef}")
-    actual_chromium = subprocess.check_output(["git", "-C", str(chromium), "rev-parse", "HEAD"], text=True).strip()
-    if actual_chromium != PINS["chromium_commit"]:
-        raise ValueError(f"Unexpected Chromium checkout: {actual_chromium}")
-    depot = directory / "depot_tools"
-    actual_depot = subprocess.check_output(["git", "-C", str(depot), "rev-parse", "HEAD"], text=True).strip()
-    if actual_depot != PINS["depot_tools_commit"]:
-        raise ValueError(f"Unexpected depot_tools checkout: {actual_depot}")
-    apply_patches(cef, chromium, os.name != "nt")
-    run(*common, "--no-update", "--force-build", "--force-distrib",
-        "--no-debug-build", "--minimal-distrib-only")
-    print("Build finished. Inspect binary_distrib; do not publish without native verification.")
+    arch = TARGETS[target][1]
+    env = environment(directory, target)
+    run(sys.executable, str(automate), "--download-dir", str(directory),
+        "--branch", PINS["cef_branch"], "--checkout", PINS["cef_commit"],
+        "--no-chromium-history", f"--{arch}-build", "--no-build", "--no-distrib", env=env)
+    verify_checkouts(directory)
+    paths = layout(directory)
+    apply_patches(paths["cef"], paths["src"], TARGETS[target][0] != "windows")
+    # Runs CEF's own patcher after ours, then gn gen for the single output directory.
+    run(sys.executable, "tools/gclient_hook.py", cwd=paths["cef"], env=env)
+
+
+def ninja_path(directory):
+    name = "ninja.exe" if os.name == "nt" else "ninja"
+    return layout(directory)["src"] / "third_party" / "ninja" / name
+
+
+def interrupt(process):
+    """Ask ninja to stop gracefully; ninja records completed edges and drops partial ones."""
+    try:
+        if os.name == "nt":
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(process.pid, signal.SIGINT)
+        process.wait(timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], check=False)
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+def build(directory, target, deadline):
+    """Run ninja until done or until the deadline; return whether all targets are built."""
+    arch = TARGETS[target][1]
+    command = [str(ninja_path(directory)), "-C", f"out/Release_GN_{arch}", *ninja_targets(target)]
+    print("+", *command, flush=True)
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    process = subprocess.Popen(command, cwd=layout(directory)["src"],
+                               env=environment(directory, target), **options)
+    try:
+        process.wait(timeout=max(0, deadline - time.time()))
+    except subprocess.TimeoutExpired:
+        print("Deadline reached; interrupting ninja to resume in the next stage.", flush=True)
+        interrupt(process)
+        return False
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, command)
+    return True
+
+
+def distrib(directory, target):
+    platform, arch = TARGETS[target]
+    paths = layout(directory)
+    args = [sys.executable, "make_distrib.py", f"--output-dir={paths['cef'] / 'binary_distrib'}",
+            "--ninja-build", f"--{arch}-build", "--minimal", "--no-docs", "--allow-partial"]
+    if platform != "linux":
+        args.append("--no-symbols")
+    run(*args, cwd=paths["cef"] / "tools", env=environment(directory, target))
+
+
+def tar_command(mode, directory):
+    tar = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tar.exe") \
+        if os.name == "nt" else "tar"
+    if mode == "create":
+        # POSIX/pax headers keep sub-second mtimes, which ninja uses to resume.
+        fmt = ["--format=posix"] if sys.platform.startswith("linux") else ["--format", "pax"]
+        return [tar, *fmt, "-cf", "-", "-C", str(directory), "."]
+    return [tar, "-xf", "-", "-C", str(directory)]
+
+
+def zstd():
+    return shutil.which("zstd") or r"C:\tools\zstd\zstd.exe"
+
+
+def pack(directory, output, part_size):
+    output.mkdir(parents=True)
+    tar = subprocess.Popen(tar_command("create", directory), stdout=subprocess.PIPE)
+    compress = subprocess.Popen([zstd(), "-q", "-T0", "-3", "-c"], stdin=tar.stdout,
+                                stdout=subprocess.PIPE)
+    tar.stdout.close()
+    index, written, part = 0, 0, None
+    while chunk := compress.stdout.read(8 * 1024 * 1024):
+        while chunk:
+            if part is None or written >= part_size:
+                if part:
+                    part.close()
+                part = (output / f"tree.tar.zst.{index:04d}").open("wb")
+                index, written = index + 1, 0
+            take = chunk[:part_size - written]
+            part.write(take)
+            written += len(take)
+            chunk = chunk[len(take):]
+    if part:
+        part.close()
+    if compress.wait() or tar.wait():
+        raise RuntimeError("Failed to pack the build tree")
+    print(f"Packed {directory} into {index} parts", flush=True)
+
+
+def unpack(parts, directory):
+    files = sorted(parts.glob("tree.tar.zst.*"))
+    if not files:
+        raise FileNotFoundError(f"No tree parts in {parts}")
+    directory.mkdir(parents=True)
+    tar = subprocess.Popen(tar_command("extract", directory), stdin=subprocess.PIPE)
+    decompress = subprocess.Popen([zstd(), "-q", "-d", "-c"], stdin=subprocess.PIPE,
+                                  stdout=tar.stdin)
+    tar.stdin.close()
+    for path in files:
+        with path.open("rb") as stream:
+            shutil.copyfileobj(stream, decompress.stdin, 8 * 1024 * 1024)
+        path.unlink()
+    decompress.stdin.close()
+    if decompress.wait() or tar.wait():
+        raise RuntimeError("Failed to unpack the build tree")
+
+
+def write_output(name, value):
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+            stream.write(f"{name}={value}\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("check-patches")
-    build_parser = sub.add_parser("build")
-    build_parser.add_argument("--directory", type=Path, required=True,
-                              help="new, dedicated directory (parent must exist)")
-    build_parser.add_argument("--arch", choices=("x64", "arm64"), required=True)
+    for name in ("sync", "build", "distrib"):
+        command = sub.add_parser(name)
+        command.add_argument("--directory", type=Path, required=True)
+        command.add_argument("--target", choices=TARGETS, required=True)
+        if name == "build":
+            command.add_argument("--deadline", type=float, required=True,
+                                 help="Unix time at which to stop ninja gracefully")
+    command = sub.add_parser("pack")
+    command.add_argument("--directory", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--part-size", type=int, default=2 * 1024**3)
+    command = sub.add_parser("unpack")
+    command.add_argument("--parts", type=Path, required=True)
+    command.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "check-patches":
         check_patches()
+    elif args.command == "sync":
+        sync(args.directory.resolve(), args.target)
+    elif args.command == "build":
+        complete = build(args.directory.resolve(), args.target, args.deadline)
+        write_output("complete", str(complete).lower())
+        print("Build complete." if complete else "Build incomplete; resume required.")
+    elif args.command == "distrib":
+        distrib(args.directory.resolve(), args.target)
+    elif args.command == "pack":
+        pack(args.directory.resolve(), args.output.resolve(), args.part_size)
     else:
-        build(args.directory.resolve(), args.arch)
+        unpack(args.parts.resolve(), args.directory.resolve())
 
 
 if __name__ == "__main__":

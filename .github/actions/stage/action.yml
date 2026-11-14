@@ -1,0 +1,161 @@
+name: CEF build stage
+description: >-
+  Run one resumable stage of a patched CEF build on a GitHub-hosted runner. Stage 1
+  syncs and patches the pinned sources; later stages restore the previous stage's
+  tree. Each stage builds until its deadline, then either packages the minimal
+  distribution or saves the tree for the next stage.
+inputs:
+  target:
+    description: Target such as linux-x64 or windows-arm64
+    required: true
+  stage:
+    description: Stage number starting at 1
+    required: true
+  previous:
+    description: Previous stage number (empty for stage 1)
+    required: false
+    default: ""
+  budget-minutes:
+    description: Minutes after job start at which ninja is stopped gracefully
+    required: false
+    default: "295"
+outputs:
+  complete:
+    description: Whether every build target finished in this stage
+    value: ${{ steps.build.outputs.complete }}
+runs:
+  using: composite
+  steps:
+    - name: Record deadline and paths
+      shell: bash
+      env:
+        BUDGET: ${{ inputs.budget-minutes }}
+      run: |
+        set -euo pipefail
+        echo "CEF_DEADLINE=$(( $(date +%s) + BUDGET * 60 ))" >> "$GITHUB_ENV"
+        # Every stage must use the same absolute tree path so ninja state stays valid.
+        case "$RUNNER_OS" in
+          Linux) tree=/home/runner/cefb; parts=/mnt/cef-parts ;;
+          macOS) tree=/Users/runner/cefb; parts=/Users/runner/cef-parts ;;
+          Windows) tree=D:/cefb; parts=D:/cef-parts ;;
+        esac
+        echo "CEF_TREE=$tree" >> "$GITHUB_ENV"
+        echo "CEF_PARTS=$parts" >> "$GITHUB_ENV"
+
+    - name: Free disk space (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+          /usr/local/share/powershell /usr/local/lib/node_modules /opt/microsoft /opt/google
+        sudo docker image prune --all --force >/dev/null || true
+        sudo mkdir -p /mnt/cef-parts
+        sudo chown "$(id -u):$(id -g)" /mnt/cef-parts
+        df -h / /mnt
+
+    - name: Select Xcode and free disk space (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcode=$(ls -d /Applications/Xcode_26.*.app | sort -V | tail -1)
+        sudo xcode-select --switch "$xcode"
+        for other in /Applications/Xcode*.app; do
+          if [ "$other" != "$xcode" ] && [ ! -L "$other" ]; then sudo rm -rf "$other"; fi
+        done
+        sudo rm -rf ~/Library/Android /usr/local/share/dotnet ~/.dotnet \
+          /Library/Developer/CoreSimulator ~/Library/Developer/CoreSimulator || true
+        xcodebuild -version
+        xcrun --sdk macosx --show-sdk-version
+        df -h /
+
+    - name: Prepare Windows toolchain
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath 'D:\' -ErrorAction SilentlyContinue
+        git config --global core.autocrlf false
+        git config --global core.filemode false
+        git config --global core.longpaths true
+        $sdk = "${env:ProgramFiles(x86)}\Windows Kits\10\Include\10.0.28000.0\um\dcomp.h"
+        if (-not (Test-Path $sdk)) {
+          # Chromium 156 requires Windows SDK 10.0.28000 (build/vs_toolchain.py).
+          $setup = Join-Path $env:RUNNER_TEMP 'winsdksetup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/?linkid=2370315' -OutFile $setup
+          $process = Start-Process $setup -Wait -PassThru -ArgumentList @(
+            '/features', 'OptionId.DesktopCPPx64', 'OptionId.DesktopCPPx86',
+            'OptionId.DesktopCPParm64', 'OptionId.WindowsDesktopDebuggers',
+            'OptionId.SigningTools', '/quiet', '/norestart', '/ceip', 'off')
+          if ($process.ExitCode -ne 0) { throw "winsdksetup failed: $($process.ExitCode)" }
+          if (-not (Test-Path $sdk)) { throw "Windows SDK 10.0.28000 headers missing after install" }
+        }
+        Get-PSDrive C, D | Format-Table -AutoSize
+
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+
+    - name: Sync, patch, and generate build files
+      if: inputs.stage == '1'
+      shell: bash
+      run: python scripts/cef.py sync --directory "$CEF_TREE" --target "${{ inputs.target }}"
+
+    - name: Download previous tree
+      if: inputs.stage != '1'
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: tree-${{ inputs.target }}-${{ inputs.previous }}
+        path: ${{ env.CEF_PARTS }}/in
+
+    - name: Restore previous tree
+      if: inputs.stage != '1'
+      shell: bash
+      run: python scripts/cef.py unpack --parts "$CEF_PARTS/in" --directory "$CEF_TREE"
+
+    - name: Build until deadline
+      id: build
+      shell: bash
+      run: python scripts/cef.py build --directory "$CEF_TREE" --target "${{ inputs.target }}" --deadline "$CEF_DEADLINE"
+
+    - name: Create minimal distribution and verify patched exports
+      if: steps.build.outputs.complete == 'true'
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        python scripts/cef.py distrib --directory "$CEF_TREE" --target "$TARGET"
+        python scripts/release.py --build "$CEF_TREE" --output "$RUNNER_TEMP/candidate" \
+          --platform "${TARGET%-*}" --arch "${TARGET#*-}" --revision "$GITHUB_SHA"
+
+    - name: Upload candidate
+      if: steps.build.outputs.complete == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: candidate-${{ inputs.target }}
+        path: ${{ runner.temp }}/candidate/*
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+
+    - name: Save tree for next stage
+      if: steps.build.outputs.complete == 'false'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python scripts/cef.py pack --directory "$CEF_TREE" --output "$CEF_PARTS/out"
+        ls -la "$CEF_PARTS/out"
+
+    - name: Upload tree
+      if: steps.build.outputs.complete == 'false'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: tree-${{ inputs.target }}-${{ inputs.stage }}
+        path: ${{ env.CEF_PARTS }}/out/*
+        if-no-files-found: error
+        retention-days: 3
+        compression-level: 0
