@@ -19,6 +19,10 @@ inputs:
     description: Minutes after job start at which ninja is stopped gracefully
     required: false
     default: "280"
+  resume-run:
+    description: For stage 1, an earlier run ID whose newest saved tree for this target replaces the sync
+    required: false
+    default: ""
 outputs:
   complete:
     description: Whether every build target finished in this stage
@@ -105,20 +109,48 @@ runs:
       with:
         python-version: "3.12"
 
+    - name: Find tree to resume
+      id: source
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RESUME_RUN: ${{ inputs.resume-run }}
+        TARGET: ${{ inputs.target }}
+        STAGE: ${{ inputs.stage }}
+        PREVIOUS: ${{ inputs.previous }}
+      run: |
+        set -euo pipefail
+        if [ "$STAGE" != 1 ]; then
+          echo "name=tree-$TARGET-$PREVIOUS" >> "$GITHUB_OUTPUT"
+        elif [ -n "$RESUME_RUN" ]; then
+          name=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired | not) | .name' \
+            | grep -E "^tree-$TARGET-[0-9]+$" | awk -F- '{ print $NF, $0 }' | sort -n | tail -1 | cut -d' ' -f2 || true)
+          if [ -n "$name" ]; then
+            echo "Resuming $name from run $RESUME_RUN"
+            echo "name=$name" >> "$GITHUB_OUTPUT"
+            echo "run=$RESUME_RUN" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No saved $TARGET tree in run $RESUME_RUN; syncing from scratch"
+          fi
+        fi
+
     - name: Sync, patch, and generate build files
-      if: inputs.stage == '1'
+      if: steps.source.outputs.name == ''
       shell: bash
       run: python scripts/cef.py sync --directory "$CEF_TREE" --target "${{ inputs.target }}"
 
     - name: Download previous tree
-      if: inputs.stage != '1'
+      if: steps.source.outputs.name != ''
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
       with:
-        name: tree-${{ inputs.target }}-${{ inputs.previous }}
+        name: ${{ steps.source.outputs.name }}
+        run-id: ${{ steps.source.outputs.run || github.run_id }}
+        github-token: ${{ steps.source.outputs.run && github.token || '' }}
         path: ${{ env.CEF_PARTS }}/in
 
     - name: Restore previous tree
-      if: inputs.stage != '1'
+      if: steps.source.outputs.name != ''
       shell: bash
       run: python scripts/cef.py unpack --parts "$CEF_PARTS/in" --directory "$CEF_TREE"
 
@@ -164,5 +196,5 @@ runs:
         name: tree-${{ inputs.target }}-${{ inputs.stage }}
         path: ${{ env.CEF_PARTS }}/out/*
         if-no-files-found: error
-        retention-days: 3
+        retention-days: 7
         compression-level: 0

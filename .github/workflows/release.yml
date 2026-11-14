@@ -1,0 +1,66 @@
+name: Publish release
+on:
+  workflow_call:
+    inputs:
+      runs:
+        type: string
+        required: true
+      targets:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: JSON list of build run IDs to take candidates from; earlier runs win
+        type: string
+        required: true
+      targets:
+        description: JSON list of targets the release must contain
+        type: string
+        default: '["linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "macos-x64", "macos-arm64"]'
+permissions:
+  contents: write
+  actions: read
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Download candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          set -euo pipefail
+          for run in $(echo "$RUNS" | jq -r '.[]'); do
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -p 'candidate-*' -D "candidates/$run" \
+              || echo "::warning::No candidates downloaded from run $run"
+          done
+      - name: Verify candidates and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUNS: ${{ inputs.runs }}
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          sources=()
+          for run in $(echo "$RUNS" | jq -r '.[]'); do sources+=(--source "candidates/$run"); done
+          python3 scripts/publish.py "${sources[@]}" --targets "$TARGETS" --output release
+          version=$(jq -r .cef_version pins.json)
+          tag="cef-${version%%+*}-patched.${GITHUB_RUN_ID}"
+          links=$(echo "$RUNS" | jq -r --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs" \
+            'map("[\(.)](\($url)/\(.))") | join(", ")')
+          {
+            echo "Patched CEF \`$version\` built by run(s) $links; published from \`$GITHUB_SHA\`."
+            echo
+            echo "Targets: $(echo "$TARGETS" | jq -r 'join(", ")'). Each \`manifest-<target>.json\` records the repository commit, pins, and patch blobs of that build."
+            echo
+            echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
+            echo "Runtime behavior has **not** been validated by CI. Run the IronRDP native tests before relying on a platform."
+          } > notes.md
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
+            --title "Patched CEF ${version%%+*} (build ${GITHUB_RUN_ID})" --notes-file notes.md \
+            -- release/*
+          echo "Published $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag"

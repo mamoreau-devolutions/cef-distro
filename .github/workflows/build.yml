@@ -14,8 +14,13 @@ on:
         description: Minutes each stage builds before saving the tree (lower only to test resumption)
         type: string
         default: "280"
+      resume-run:
+        description: Earlier run ID whose newest saved trees seed stage 1 (targets without one sync from scratch)
+        type: string
+        default: ""
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: build-${{ github.ref }}-${{ inputs.targets }}
   cancel-in-progress: false
@@ -31,46 +36,15 @@ jobs:
     with:
       target: ${{ matrix.target }}
       stage-minutes: ${{ inputs.stage-minutes }}
+      resume-run: ${{ inputs.resume-run }}
 
   release:
     needs: build
     if: inputs.publish
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: candidate-*
-          path: candidates
-      - name: Verify candidates and publish prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TARGETS: ${{ inputs.targets }}
-        run: |
-          set -euo pipefail
-          mkdir release
-          for target in $(echo "$TARGETS" | jq -r '.[]'); do
-            dir="candidates/candidate-$target"
-            (cd "$dir" && sha256sum --check SHA256SUMS)
-            jq -e --arg sha "$GITHUB_SHA" '.repository_commit == $sha' "$dir/manifest.json" >/dev/null
-            cp "$dir"/*.tar.bz2 release/
-            cp "$dir/manifest.json" "release/manifest-$target.json"
-            cat "$dir/SHA256SUMS" >> release/SHA256SUMS
-          done
-          version=$(jq -r .cef_version pins.json)
-          tag="cef-${version%%+*}-patched.${GITHUB_RUN_NUMBER}"
-          {
-            echo "Patched CEF \`$version\` built by [run $GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) from \`$GITHUB_SHA\`."
-            echo
-            echo "Targets: $(echo "$TARGETS" | jq -r 'join(", ")')."
-            echo
-            echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
-            echo "Runtime behavior has **not** been validated by CI. Run the IronRDP native tests before relying on a platform."
-          } > notes.md
-          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
-            --title "Patched CEF ${version%%+*} (build ${GITHUB_RUN_NUMBER})" --notes-file notes.md \
-            -- release/*
-          echo "Published $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag"
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      runs: '[${{ github.run_id }}]'
+      targets: ${{ inputs.targets }}

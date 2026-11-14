@@ -9,8 +9,12 @@ on:
       stage-minutes:
         type: string
         default: "280"
+      resume-run:
+        type: string
+        default: ""
 permissions:
   contents: read
+  actions: read
 jobs:
   s1:
     name: stage 1
@@ -27,6 +31,7 @@ jobs:
           stage: "1"
           previous: ""
           budget-minutes: ${{ inputs.stage-minutes }}
+          resume-run: ${{ inputs.resume-run }}
   s2:
     name: stage 2
     needs: s1

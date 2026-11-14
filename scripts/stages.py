@@ -31,8 +31,12 @@ def render():
         "      stage-minutes:",
         "        type: string",
         "        default: \"280\"",
+        "      resume-run:",
+        "        type: string",
+        "        default: \"\"",
         "permissions:",
         "  contents: read",
+        "  actions: read",
         "jobs:",
     ]
     for stage in range(1, STAGES + 1):
@@ -55,6 +59,8 @@ def render():
             f"          previous: \"{stage - 1 if stage > 1 else ''}\"",
             "          budget-minutes: ${{ inputs.stage-minutes }}",
         ]
+        if stage == 1:
+            lines += ["          resume-run: ${{ inputs.resume-run }}"]
     needs = ", ".join(f"s{stage}" for stage in range(1, STAGES + 1))
     lines += [
         "  verdict:",
