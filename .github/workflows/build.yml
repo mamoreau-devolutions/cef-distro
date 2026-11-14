@@ -19,8 +19,56 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: [self-hosted, "${{ inputs.os }}", "${{ inputs.arch }}", cef-build]
     timeout-minutes: 1440
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Build in a unique dedicated directory
         shell: bash
         run: python3 scripts/cef.py build --directory "$RUNNER_TEMP/cef-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --arch "${{ inputs.arch }}"
+      - name: Verify exports and prepare candidate
+        shell: bash
+        env:
+          BUILD_OS: ${{ inputs.os }}
+          BUILD_ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          case "$BUILD_OS" in
+            Linux) platform=linux ;;
+            macOS) platform=macos ;;
+            Windows) platform=windows ;;
+            *) exit 1 ;;
+          esac
+          python3 scripts/release.py --build "$RUNNER_TEMP/cef-build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --output "$RUNNER_TEMP/cef-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --platform "$platform" --arch "$BUILD_ARCH" --revision "$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cef-candidate
+          path: ${{ runner.temp }}/cef-release-${{ github.run_id }}-${{ github.run_attempt }}/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cef-candidate
+          path: candidate
+      - name: Verify transfer and create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_OS: ${{ inputs.os }}
+          BUILD_ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          cd candidate
+          sha256sum --check SHA256SUMS
+          tag="cef-${GITHUB_SHA:0:12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" --target "$GITHUB_SHA" --draft \
+            --title "CEF candidate $BUILD_OS $BUILD_ARCH" \
+            --notes "Unvalidated candidate. Verify native runtime, cef-rs import, packaging, and patch behavior before publishing." \
+            -- ./*.tar.bz2 SHA256SUMS manifest.json

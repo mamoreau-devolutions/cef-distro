@@ -1,8 +1,8 @@
 # Patched CEF for IronRDP
 
 This repository holds patches, not a CEF fork. **No binary release has been
-produced or validated here yet.** The manual build workflow is an initial,
-unverified integration, not a release pipeline. No workflow publishes assets.
+produced or validated here yet.** The manual build and draft-release workflow
+is an initial, unverified integration. It never publishes a release.
 Only the upstream IronRDP custom build on macOS ARM64 is documented as
 validated; Linux and Windows patched runtimes remain unverified.
 
@@ -14,8 +14,9 @@ Chromium `refs/tags/156.0.8078.88` and depot_tools
 `132599ebbd8d22d1b1bd5ea703a6d3bc493edd71`. The pinned cef-rs workspace version
 is `156.4.0+156.0.26`, corresponding to CEF
 `156.0.26+g8ea0c73+chromium-156.0.8078.88`.
+The Chromium tag resolves to `8954d18543712dc11b97c3aca0a6e714aa2d7dcd`.
 
-The five unchanged patches come from
+The five unchanged patches match the `ironrdp-browser` branch and come from
 [IronRDP server/cef/patches at 692c34cf](https://github.com/Devolutions/IronRDP/tree/692c34cf429a704f7bc5d99188b5be6b961043d7/server/cef/patches).
 IronRDP is licensed under MIT or Apache-2.0; the corresponding license texts
 are included. `scripts/cef.py` verifies their original Git blob identities.
@@ -44,7 +45,8 @@ standard hosted runner or run a checkout on a shared machine.
 
 The `Manual native build` workflow requires an explicitly provisioned
 self-hosted runner with labels `cef-build`, OS (`Linux`, `macOS`, or `Windows`)
-and native architecture (`x64` or `arm64`), and Python 3 and Git on PATH.
+and native architecture (`x64` or `arm64`), and Python 3, Git, and `nm` (or
+Visual Studio's `dumpbin` on Windows) on PATH.
 Provision no runner for untrusted PRs. It runs only when manually dispatched
 against `master`; it is not automatically dispatched by pushes or PRs.
 Alternatively run on a prepared native host:
@@ -57,11 +59,19 @@ The directory must not exist and its parent must exist. It is never cleaned or
 reused. The script verifies the downloaded pinned automation script's Git blob,
 syncs without building, verifies all three checkouts, applies patches, then
 forces CEF's build/distribution step and GN regeneration without updating.
-The output should be in `chromium/src/cef/binary_distrib`; inspect the build
-and test it before distributing anything. These steps have not yet been
-exercised on a suitably provisioned runner. CEF and Chromium may change files
-during their own patching; a lightweight source check is not sufficient proof
-that a complete build will succeed.
+The output should be in `chromium/src/cef/binary_distrib`; inspect and test it
+before distribution.
+
+After a build, the workflow checks the expected custom library exports and
+standard archive name, then creates a **draft** GitHub Release containing
+the original archive, `SHA256SUMS`, and `manifest.json` with upstream pins,
+repository revision and patch identities. Each platform run creates its own
+unique draft. Export checks are not runtime validation: review and test each
+candidate before publishing. The draft is created in a separate hosted job;
+the trusted build runner does not receive release-write permission. These
+steps have not yet been exercised on a suitably provisioned runner. CEF and
+Chromium may change files during their own patching; a lightweight source check
+is not sufficient proof that a complete build will succeed.
 
 ## Consumption and release gate
 
@@ -85,8 +95,6 @@ the exported directory and IronRDP `package-cef` on each native target, then
 run the upstream `e2e.py`, `clipboard.py`, `devices.py`, and `shutdown.py`
 tests as applicable. Coordinate any cef-rs/CEF upgrade with the consumer.
 Do not publish until these checks and patch-specific exports are verified.
-A future release must include immutable archives, SHA-256 checksums, and a
-manifest binding all upstream and patch revisions to each platform artifact.
 
 ## Updates
 

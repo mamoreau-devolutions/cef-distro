@@ -39,6 +39,13 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Patch differs"):
                 cef.verify_patch_identity()
 
+    def test_compatibility_rejects_changed_chromium_tag(self):
+        data = (f"{{'chromium_checkout': 'refs/tags/wrong', "
+                f"'depot_tools_checkout': '{cef.PINS['depot_tools_commit']}'}}").encode()
+        with patch.object(cef, "download", return_value=data):
+            with self.assertRaisesRegex(ValueError, "Chromium tag"):
+                cef.verify_compatibility()
+
 
 if __name__ == "__main__":
     unittest.main()

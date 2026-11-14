@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify patches against pinned source or build in a new, dedicated directory."""
 import argparse
+import ast
 import ctypes
 import hashlib
 import json
@@ -76,9 +77,20 @@ def verify_patch_identity():
             raise ValueError(f"Patch differs from recorded blob: {name}")
 
 
+def verify_compatibility():
+    url = ("https://raw.githubusercontent.com/chromiumembedded/cef/"
+           f"{PINS['cef_commit']}/CHROMIUM_BUILD_COMPATIBILITY.txt")
+    compatibility = ast.literal_eval(download(url).decode("utf-8"))
+    if compatibility["chromium_checkout"] != f"refs/tags/{PINS['chromium_tag']}":
+        raise ValueError("Chromium tag does not match CEF compatibility")
+    if compatibility["depot_tools_checkout"] != PINS["depot_tools_commit"]:
+        raise ValueError("depot_tools revision does not match CEF compatibility")
+
+
 def check_patches():
     # This checks upstream files only; CEF's own Chromium patches may alter them.
     verify_patch_identity()
+    verify_compatibility()
     with tempfile.TemporaryDirectory(prefix="cef-patch-check-") as temp:
         trees = {name: Path(temp) / name for name in PATCHES}
         for tree, directory in trees.items():
@@ -111,6 +123,7 @@ def build(directory, arch):
         raise ValueError("At least 200 GiB free disk is required")
     if physical_memory() < 16 * 1024**3:
         raise ValueError("At least 16 GiB physical memory is required")
+    verify_compatibility()
     directory.mkdir()
     url = ("https://raw.githubusercontent.com/chromiumembedded/cef/"
            f"{PINS['cef_commit']}/tools/automate/automate-git.py")
@@ -134,7 +147,7 @@ def build(directory, arch):
         os.environ.setdefault("GN_DEFINES", gn)
     common = [sys.executable, str(automate), "--download-dir", str(directory),
               "--branch", PINS["cef_branch"], "--checkout", PINS["cef_commit"],
-              f"--{arch}-build"]
+              "--no-chromium-history", f"--{arch}-build"]
     if arch == "x64" or sys.platform == "darwin":
         common.append("--with-pgo-profiles")
     run(*common, "--no-build", "--no-distrib")
@@ -144,8 +157,7 @@ def build(directory, arch):
     if actual_cef != PINS["cef_commit"]:
         raise ValueError(f"Unexpected CEF checkout: {actual_cef}")
     actual_chromium = subprocess.check_output(["git", "-C", str(chromium), "rev-parse", "HEAD"], text=True).strip()
-    expected_chromium = subprocess.check_output(["git", "-C", str(chromium), "rev-parse", f"refs/tags/{PINS['chromium_tag']}^{{commit}}"], text=True).strip()
-    if actual_chromium != expected_chromium:
+    if actual_chromium != PINS["chromium_commit"]:
         raise ValueError(f"Unexpected Chromium checkout: {actual_chromium}")
     depot = directory / "depot_tools"
     actual_depot = subprocess.check_output(["git", "-C", str(depot), "rev-parse", "HEAD"], text=True).strip()
