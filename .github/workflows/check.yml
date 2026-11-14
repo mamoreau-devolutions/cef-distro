@@ -18,3 +18,31 @@ jobs:
         run: |
           df -h .
           free -h
+  exporter-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: tauri-apps/cef-rs
+          ref: 9aa78c450489eddb828eb982eaee6c104a89d348
+          path: cef-rs
+      - name: Exercise pinned exporter with a synthetic CEF archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cef-export-smoke"
+          name='cef_binary_156.0.26+g8ea0c73+chromium-156.0.8078.88_linux64_minimal'
+          root="$work/$name"
+          mkdir -p "$root"/{Release,Resources,cmake,include,libcef_dll}
+          printf 'library' > "$root/Release/libcef.so"
+          printf 'sandbox' > "$root/Release/chrome-sandbox"
+          printf 'resource' > "$root/Resources/test.pak"
+          touch "$root/CMakeLists.txt" "$root/CREDITS.html"
+          tar -C "$work" -cjf "$work/$name.tar.bz2" "$name"
+          cargo run --manifest-path cef-rs/Cargo.toml -p export-cef-dir -- \
+            --archive "$work/$name.tar.bz2" --target x86_64-unknown-linux-gnu "$work/output"
+          test "$(cat "$work/output/libcef.so")" = library
+          test "$(cat "$work/output/chrome-sandbox")" = sandbox
+          test "$(cat "$work/output/test.pak")" = resource
+          python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["type"] == "minimal" and p["name"] == sys.argv[2] and len(p["sha1"]) == 40' "$work/output/archive.json" "$name.tar.bz2"

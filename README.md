@@ -33,7 +33,8 @@ Update those identities deliberately when changing patches.
 `python3 scripts/cef.py check-patches` downloads only the touched pinned
 upstream files, verifies patch identities and applies all patches in order.
 This does not simulate CEF's own Chromium patches, compile CEF, check exports,
-or validate runtime behavior.
+or validate runtime behavior. The Actions exporter smoke test uses a synthetic
+Linux archive to check flattening and metadata; it is not a native CEF build.
 
 ## Build (manual, experimental)
 
