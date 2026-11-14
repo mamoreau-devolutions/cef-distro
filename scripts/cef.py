@@ -11,7 +11,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -249,27 +251,73 @@ def distrib(directory, target):
 
 
 def tar_command(mode, directory):
-    tar = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tar.exe") \
-        if os.name == "nt" else "tar"
     if mode == "create":
         # POSIX/pax headers keep sub-second mtimes, which ninja uses to resume.
         fmt = ["--format=posix"] if sys.platform.startswith("linux") else ["--format", "pax"]
-        return [tar, *fmt, "-cf", "-", "-C", str(directory), "."]
-    return [tar, "-xf", "-", "-C", str(directory)]
+        return ["tar", *fmt, "-cf", "-", "-C", str(directory), "."]
+    return ["tar", "-xf", "-", "-C", str(directory)]
+
+
+# Windows' bundled bsdtar crashes on Chromium trees, so Windows streams with tarfile.
+# Exact mtimes travel in pax headers because tarfile's float mtimes lose precision.
+DIRECTORY_LINK = "CEF.directory_link"
+
+
+def write_tree(directory, stream):
+    with tarfile.open(fileobj=stream, mode="w|", format=tarfile.PAX_FORMAT) as archive:
+        pending = [directory]
+        while pending:
+            folder = pending.pop()
+            with os.scandir(folder) as entries:
+                for entry in sorted(entries, key=lambda item: item.name):
+                    path = Path(entry.path)
+                    name = path.relative_to(directory).as_posix()
+                    link = entry.is_symlink() or os.path.isjunction(path)
+                    info = archive.gettarinfo(str(path), name)
+                    if link:
+                        info.type, info.linkname, info.size = tarfile.SYMTYPE, os.readlink(path), 0
+                    mtime = entry.stat(follow_symlinks=False).st_mtime_ns
+                    info.mtime = mtime // 10**9
+                    info.pax_headers = {"mtime": f"{mtime // 10**9}.{mtime % 10**9:09d}"}
+                    if link and path.is_dir():
+                        info.pax_headers[DIRECTORY_LINK] = "1"
+                    if info.isreg():
+                        with path.open("rb") as data:
+                            archive.addfile(info, data)
+                    else:
+                        archive.addfile(info)
+                    if info.isdir():
+                        pending.append(path)
+
+
+def read_tree(stream, directory):
+    times = []
+    with tarfile.open(fileobj=stream, mode="r|") as archive:
+        for member in archive:
+            target = directory / member.name
+            if member.issym():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(member.linkname, target,
+                           target_is_directory=member.pax_headers.get(DIRECTORY_LINK) == "1")
+            else:
+                archive.extract(member, directory, set_attrs=not member.isdir(),
+                                filter="fully_trusted")
+            seconds, _, fraction = member.pax_headers.get("mtime", str(int(member.mtime))).partition(".")
+            times.append((target, int(seconds) * 10**9 + int(fraction.ljust(9, "0")[:9] or 0)))
+    # Children first, so restoring a file does not disturb its directory's mtime.
+    for target, mtime in reversed(times):
+        if os.name == "nt" and target.is_symlink():
+            continue  # Windows cannot set a link's own times without following it.
+        os.utime(target, ns=(mtime, mtime), follow_symlinks=os.name == "nt")
 
 
 def zstd():
     return shutil.which("zstd") or r"C:\tools\zstd\zstd.exe"
 
 
-def pack(directory, output, part_size):
-    output.mkdir(parents=True)
-    tar = subprocess.Popen(tar_command("create", directory), stdout=subprocess.PIPE)
-    compress = subprocess.Popen([zstd(), "-q", "-T0", "-3", "-c"], stdin=tar.stdout,
-                                stdout=subprocess.PIPE)
-    tar.stdout.close()
+def split(stream, output, part_size):
     index, written, part = 0, 0, None
-    while chunk := compress.stdout.read(8 * 1024 * 1024):
+    while chunk := stream.read(8 * 1024 * 1024):
         while chunk:
             if part is None or written >= part_size:
                 if part:
@@ -282,10 +330,32 @@ def pack(directory, output, part_size):
             chunk = chunk[len(take):]
     if part:
         part.close()
-    codes = (tar.wait(), compress.wait())
-    if any(codes):
+    return index
+
+
+def pack(directory, output, part_size):
+    output.mkdir(parents=True)
+    tar = None if os.name == "nt" else subprocess.Popen(tar_command("create", directory),
+                                                         stdout=subprocess.PIPE)
+    compress = subprocess.Popen([zstd(), "-q", "-T0", "-3", "-c"],
+                                stdin=tar.stdout if tar else subprocess.PIPE, stdout=subprocess.PIPE)
+    parts = []
+    splitter = threading.Thread(target=lambda: parts.append(split(compress.stdout, output, part_size)))
+    splitter.start()
+    try:
+        if tar:
+            tar.stdout.close()
+        else:
+            write_tree(directory, compress.stdin)
+    finally:
+        if not tar:
+            compress.stdin.close()
+        splitter.join()
+    codes = (tar.wait() if tar else 0, compress.wait())
+    compress.stdout.close()
+    if any(codes) or not parts:
         raise RuntimeError(f"Failed to pack the build tree (tar={codes[0]}, zstd={codes[1]})")
-    print(f"Packed {directory} into {index} parts", flush=True)
+    print(f"Packed {directory} into {parts[0]} parts", flush=True)
 
 
 def unpack(parts, directory):
@@ -293,16 +363,42 @@ def unpack(parts, directory):
     if not files:
         raise FileNotFoundError(f"No tree parts in {parts}")
     directory.mkdir(parents=True)
-    tar = subprocess.Popen(tar_command("extract", directory), stdin=subprocess.PIPE)
+    tar = None if os.name == "nt" else subprocess.Popen(tar_command("extract", directory),
+                                                         stdin=subprocess.PIPE)
     decompress = subprocess.Popen([zstd(), "-q", "-d", "-c"], stdin=subprocess.PIPE,
-                                  stdout=tar.stdin)
-    tar.stdin.close()
-    for path in files:
-        with path.open("rb") as stream:
-            shutil.copyfileobj(stream, decompress.stdin, 8 * 1024 * 1024)
-        path.unlink()
-    decompress.stdin.close()
-    codes = (decompress.wait(), tar.wait())
+                                  stdout=tar.stdin if tar else subprocess.PIPE)
+    if tar:
+        tar.stdin.close()
+        reader = None
+    else:
+        errors = []
+
+        def extract():
+            try:
+                read_tree(decompress.stdout, directory)
+            except BaseException as error:
+                errors.append(error)
+                decompress.stdout.close()
+
+        reader = threading.Thread(target=extract)
+        reader.start()
+    try:
+        for path in files:
+            with path.open("rb") as stream:
+                shutil.copyfileobj(stream, decompress.stdin, 8 * 1024 * 1024)
+            path.unlink()
+    except BrokenPipeError:
+        if not reader:
+            raise
+    finally:
+        decompress.stdin.close()
+        if reader:
+            reader.join()
+    if reader and errors:
+        raise errors[0]
+    codes = (decompress.wait(), tar.wait() if tar else 0)
+    if decompress.stdout:
+        decompress.stdout.close()
     if any(codes):
         raise RuntimeError(f"Failed to unpack the build tree (zstd={codes[0]}, tar={codes[1]})")
 

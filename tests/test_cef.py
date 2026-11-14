@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -63,8 +64,38 @@ class BuildTests(unittest.TestCase):
             for index, (path, data) in enumerate(files.items()):
                 copy = restored / path.relative_to(source)
                 self.assertEqual(copy.read_bytes(), data)
-                if os.name != "nt":
-                    self.assertEqual(copy.stat().st_mtime_ns, stamp + index)
+                self.assertEqual(copy.stat().st_mtime_ns, path.stat().st_mtime_ns)
+
+    def test_python_tree_stream_preserves_files_links_and_exact_mtimes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source"
+            (source / "out" / "obj").mkdir(parents=True)
+            (source / "out" / "obj" / "a.o").write_bytes(os.urandom(5000))
+            (source / "build.ninja").write_text("rule cc\n")
+            try:
+                os.symlink("build.ninja", source / "link.ninja")
+                os.symlink("out", source / "out_link", target_is_directory=True)
+            except OSError:
+                pass  # Symlinks need privileges on some Windows hosts.
+            stamp = 1_700_000_000_123_456_700
+            for index, path in enumerate(sorted(source.rglob("*"))):
+                if not path.is_symlink():
+                    os.utime(path, ns=(stamp + index * 100, stamp + index * 100))
+            expected = {p.relative_to(source): p.lstat().st_mtime_ns for p in source.rglob("*")
+                        if not p.is_symlink()}
+            stream = io.BytesIO()
+            cef.write_tree(source, stream)
+            stream.seek(0)
+            restored = Path(temp) / "restored"
+            restored.mkdir()
+            cef.read_tree(stream, restored)
+            for relative, mtime in expected.items():
+                self.assertEqual((restored / relative).lstat().st_mtime_ns, mtime, relative)
+            self.assertEqual((restored / "out" / "obj" / "a.o").read_bytes(),
+                             (source / "out" / "obj" / "a.o").read_bytes())
+            if (source / "out_link").is_symlink():
+                self.assertEqual(os.readlink(restored / "link.ninja"), "build.ninja")
+                self.assertTrue((restored / "out_link" / "obj" / "a.o").is_file())
 
     def test_apply_order_and_posix_gate(self):
         for posix in (False, True):
