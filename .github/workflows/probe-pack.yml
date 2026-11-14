@@ -37,7 +37,6 @@ jobs:
           python scripts/cef.py pack --directory "$root" --output "$RUNNER_TEMP/parts"
           ls -la "$RUNNER_TEMP/parts"
           python scripts/cef.py unpack --parts "$RUNNER_TEMP/parts" --directory "$RUNNER_TEMP/restored"
-          cmp "$deep/file.txt" "$RUNNER_TEMP/restored/${deep#$root/}file.txt"
           python - "$root" "$RUNNER_TEMP/restored" <<'PY'
           import os, sys
           a, b = sys.argv[1:]
@@ -58,6 +57,12 @@ jobs:
           $root = "$env:RUNNER_TEMP\locked"
           New-Item -ItemType Directory $root | Out-Null
           'x' | Set-Content "$root\a.txt"
+          New-Item -ItemType Directory "$root\target" | Out-Null
+          'y' | Set-Content "$root\target\b.txt"
+          cmd /c mklink /J "$root\junction" "$root\target"
+          cmd /c mklink "$root\filelink.txt" "$root\a.txt"
+          python scripts/cef.py pack --directory $root --output "$env:RUNNER_TEMP\jparts"
+          "links exit $LASTEXITCODE"
           $lock = [IO.File]::Open("$root\a.txt", 'Open', 'Read', 'None')
           python scripts/cef.py pack --directory $root --output "$env:RUNNER_TEMP\lparts"
           "exit $LASTEXITCODE"
