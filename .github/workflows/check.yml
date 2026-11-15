@@ -46,3 +46,31 @@ jobs:
           test "$(cat "$work/output/chrome-sandbox")" = sandbox
           test "$(cat "$work/output/test.pak")" = resource
           python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["type"] == "minimal" and p["name"] == sys.argv[2] and len(p["sha1"]) == 40' "$work/output/archive.json" "$name.tar.bz2"
+      - name: Exercise macOS framework symlink export
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in x64 arm64; do
+            case "$arch" in
+              x64) target=x86_64-apple-darwin; cpu=0x01000007; expected=x86_64 ;;
+              arm64) target=aarch64-apple-darwin; cpu=0x0100000c; expected=arm64 ;;
+            esac
+            work="$RUNNER_TEMP/cef-export-macos-$arch"
+            name="cef_binary_156.0.26+g8ea0c73+chromium-156.0.8078.88_macos${arch}_minimal"
+            root="$work/$name"
+            framework="$root/Release/Chromium Embedded Framework.framework"
+            mkdir -p "$framework/Versions/A/Resources" "$root"/{cmake,include,libcef_dll}
+            python3 -c 'import struct,sys; open(sys.argv[1],"wb").write(struct.pack("<8I",0xfeedfacf,int(sys.argv[2],0),0,6,0,0,0,0))' \
+              "$framework/Versions/A/Chromium Embedded Framework" "$cpu"
+            ln -s A "$framework/Versions/Current"
+            ln -s 'Versions/Current/Chromium Embedded Framework' "$framework/Chromium Embedded Framework"
+            ln -s Versions/Current/Resources "$framework/Resources"
+            touch "$root/CMakeLists.txt" "$root/CREDITS.html" "$root/include/cef_app.h"
+            tar -C "$work" -cjf "$work/$name.tar.bz2" "$name"
+            cargo run --quiet --manifest-path cef-rs/Cargo.toml -p export-cef-dir -- \
+              --archive "$work/$name.tar.bz2" --target "$target" "$work/output"
+            exported="$work/output/Chromium Embedded Framework.framework"
+            test -L "$exported/Versions/Current"
+            test -L "$exported/Chromium Embedded Framework"
+            file -Lb "$exported/Chromium Embedded Framework" | grep -iE "Mach-O 64-bit.*$expected"
+          done
