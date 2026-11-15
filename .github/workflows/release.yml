@@ -8,6 +8,9 @@ on:
       targets:
         type: string
         required: true
+      dry-run:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       runs:
@@ -18,6 +21,10 @@ on:
         description: JSON list of targets the release must contain
         type: string
         default: '["linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "macos-x64", "macos-arm64"]'
+      dry-run:
+        description: Verify candidates without publishing a release
+        type: boolean
+        default: false
 permissions:
   contents: write
   actions: read
@@ -34,13 +41,10 @@ jobs:
         run: |
           set -euo pipefail
           for run in $(echo "$RUNS" | jq -r '.[]'); do
-            gh run download "$run" -R "$GITHUB_REPOSITORY" -p 'candidate-*' -D "candidates/$run" \
-              || echo "::warning::No candidates downloaded from run $run"
+            gh run download "$run" -R "$GITHUB_REPOSITORY" -p 'candidate-*' -D "candidates/$run"
           done
-      - name: Verify candidates and publish prerelease
+      - name: Verify and assemble candidates
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           RUNS: ${{ inputs.runs }}
           TARGETS: ${{ inputs.targets }}
         run: |
@@ -48,6 +52,57 @@ jobs:
           sources=()
           for run in $(echo "$RUNS" | jq -r '.[]'); do sources+=(--source "candidates/$run"); done
           python3 scripts/publish.py "${sources[@]}" --targets "$TARGETS" --output release
+      - name: Read exporter revision
+        id: pins
+        run: echo "cef_rs=$(jq -r .cef_rs_commit pins.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: tauri-apps/cef-rs
+          ref: ${{ steps.pins.outputs.cef_rs }}
+          path: cef-rs
+      - name: Smoke-test real archives with the pinned cef-rs exporter
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          for target in $(echo "$TARGETS" | jq -r '.[]'); do
+            case "$target" in
+              linux-x64) rust_target=x86_64-unknown-linux-gnu; library=libcef.so; expected='ELF 64-bit.*x86-64' ;;
+              linux-arm64) rust_target=aarch64-unknown-linux-gnu; library=libcef.so; expected='ELF 64-bit.*aarch64' ;;
+              windows-x64) rust_target=x86_64-pc-windows-msvc; library=libcef.dll; expected='PE32\+.*x86-64' ;;
+              windows-arm64) rust_target=aarch64-pc-windows-msvc; library=libcef.dll; expected='PE32\+.*(aarch64|arm64)' ;;
+              macos-x64) rust_target=x86_64-apple-darwin; library='Chromium Embedded Framework.framework/Chromium Embedded Framework'; expected='Mach-O 64-bit.*x86_64' ;;
+              macos-arm64) rust_target=aarch64-apple-darwin; library='Chromium Embedded Framework.framework/Chromium Embedded Framework'; expected='Mach-O 64-bit.*arm64' ;;
+              *) echo "::error::Unsupported target: $target"; exit 1 ;;
+            esac
+            archive="$GITHUB_WORKSPACE/release/$(jq -r .archive "release/manifest-$target.json")"
+            work="$RUNNER_TEMP/cef-export-smoke-$target"
+            mkdir -p "$work"
+            cargo run --quiet --manifest-path cef-rs/Cargo.toml -p export-cef-dir -- \
+              --archive "$archive" --target "$rust_target" "$work/output"
+            output="$work/output"
+            test -f "$output/$library"
+            file -Lb "$output/$library" | tee /dev/stderr | grep -iE "$expected"
+            test -f "$output/include/cef_app.h"
+            case "$target" in
+              linux-*) test -f "$output/chrome-sandbox"; test -f "$output/icudtl.dat" ;;
+              windows-*) test -f "$output/bootstrap.exe"; test -f "$output/bootstrapc.exe"; test -f "$output/icudtl.dat" ;;
+              macos-*) test -L "$output/Chromium Embedded Framework.framework/Versions/Current" ;;
+            esac
+            sha1=$(sha1sum "$archive" | cut -d' ' -f1)
+            jq -e --arg name "$(basename "$archive")" --arg sha1 "$sha1" \
+              '.type == "minimal" and .name == $name and .sha1 == $sha1' "$output/archive.json" >/dev/null
+            rm -rf -- "$work"
+          done
+      - name: Publish prerelease
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUNS: ${{ inputs.runs }}
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
           version=$(jq -r .cef_version pins.json)
           tag="cef-${version%%+*}-patched.${GITHUB_RUN_ID}"
           links=$(echo "$RUNS" | jq -r --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs" \
@@ -58,6 +113,7 @@ jobs:
             echo "Targets: $(echo "$TARGETS" | jq -r 'join(", ")'). Each \`manifest-<target>.json\` records the repository commit, pins, and patch blobs of that build."
             echo
             echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
+            echo "CI also smoke-tested importing each archive with the pinned cef-rs exporter and checked the library architecture."
             echo "Runtime behavior has **not** been validated by CI. Run the IronRDP native tests before relying on a platform."
           } > notes.md
           gh release create "$tag" --target "$GITHUB_SHA" --prerelease \

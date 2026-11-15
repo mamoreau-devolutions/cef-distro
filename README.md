@@ -73,10 +73,12 @@ into `build-target.yml` (regenerate with `python scripts/stages.py`):
    directory, and verifies the 14 patched exports in `libcef`. The candidate
    archive, `SHA256SUMS` and `manifest.json` are uploaded.
 5. The **release** job (`release.yml`) checks every candidate's checksum and
-   that its manifest carries this checkout's pins and patch blobs, then
-   publishes a prerelease tagged `cef-<cef version>-patched.<run id>`. Dispatch
-   **Publish release** directly with a JSON list of run IDs to assemble targets
-   built by different runs (earlier runs win).
+   that its manifest carries this checkout's pins and patch blobs. It imports
+   each archive with the pinned cef-rs exporter and checks the resulting
+   library's architecture and essential files, then publishes a prerelease
+   tagged `cef-<cef version>-patched.<run id>`. Dispatch **Publish release**
+   directly with a JSON list of run IDs to assemble targets built by different
+   runs (earlier runs win). Set `dry-run` to verify without publishing.
 
 Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
 `windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and
@@ -117,9 +119,9 @@ export-cef-dir --archive cef_binary_..._linux64_minimal.tar.bz2 \
 export CEF_PATH=/path/per/patched/release
 ```
 
-This flattens `Release`/`Resources` and writes `archive.json` (the `Check`
-workflow smoke-tests it with a synthetic archive). A cef-rs fork can instead
-download from the release URL in its build script; either way:
+This flattens `Release`/`Resources` and writes `archive.json`. CI smoke-tests
+the exporter with both synthetic and release archives. A cef-rs fork can
+instead download from the release URL in its build script; either way:
 
 - Use a distinct `CEF_PATH` or cache directory per patched release. An invalid
   or too-new `archive.json` makes this cef-rs revision silently download
