@@ -1,9 +1,9 @@
 $CefRoot = Split-Path $PSScriptRoot -Parent
 $CefPins = Get-Content -Raw -Encoding utf8 (Join-Path $CefRoot 'pins.json') | ConvertFrom-Json -AsHashtable
 $CefPatchBlobs = [ordered]@{
-    'isolated-clipboard.patch' = 'ffb4fca9488c0851a0e4b6d6851dc79b3a33c14b'
-    'remote-devices-cef.patch' = '2febae6e2f9c88d4565c87146f9950732f795b24'
-    'remote-devices-chromium.patch' = 'c4a158a7c6108c8316e5111eb1ea7415abeac830'
+    'isolated-clipboard.patch' = '5d9af697b96cb609504896d1d92b3fb090ad26a2'
+    'remote-devices-cef.patch' = 'cfe65d65f75fcd7bd1e9160c9087520878b578d0'
+    'remote-devices-chromium.patch' = '81abad66a88a812b13e04771c42242190c078b25'
     'in-process-audio-shutdown.patch' = 'ac5215315c4e8439d88474989f245f2750c43116'
     'disable-chromium-shutdown-signals.patch' = 'bd49755a5de794d2b7b16e865b00b2332611f770'
 }

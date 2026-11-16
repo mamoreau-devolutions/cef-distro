@@ -10,10 +10,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'candidate.ps1')
 $exports = @(
     'cef_isolated_clipboard_enabled', 'cef_isolated_clipboard_generation',
-    'cef_isolated_clipboard_read', 'cef_isolated_clipboard_write',
-    'cef_isolated_clipboard_write_files', 'cef_remote_media_enabled',
-    'cef_remote_camera_get_format', 'cef_remote_camera_push_frame',
-    'cef_remote_microphone_active', 'cef_remote_microphone_push',
+    'cef_isolated_clipboard_read', 'cef_isolated_clipboard_write_item',
+    'cef_remote_media_enabled', 'cef_remote_camera_get_format',
+    'cef_remote_camera_push_frame', 'cef_remote_microphone_active',
+    'cef_remote_microphone_push', 'cef_remote_microphone_reset',
     'cef_remote_webauthn_enabled', 'cef_remote_webauthn_set_handler',
     'cef_remote_webauthn_respond', 'cef_remote_webauthn_set_platform_available'
 )

@@ -25,7 +25,7 @@ IronRDP revisions, plus the Git blob of CEF's `automate-git.py`:
 - cef-rs `9aa78c450489eddb828eb982eaee6c104a89d348` (`156.4.0+156.0.26`).
 
 The five unchanged patches come from
-[IronRDP `ironrdp-browser` server/cef/patches at 692c34cf](https://github.com/Devolutions/IronRDP/tree/692c34cf429a704f7bc5d99188b5be6b961043d7/server/cef/patches).
+[IronRDP `ironrdp-browser` server/cef/patches at 64168d20](https://github.com/Devolutions/IronRDP/tree/64168d204f4369b6657b233bf7e6121c5acc0271/server/cef/patches).
 IronRDP is licensed under MIT or Apache-2.0; both license texts are included.
 `scripts/candidate.ps1` verifies their Git blob identities; update those deliberately
 when changing patches.

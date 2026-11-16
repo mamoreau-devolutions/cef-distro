@@ -6,6 +6,6 @@
   "chromium_commit": "8954d18543712dc11b97c3aca0a6e714aa2d7dcd",
   "depot_tools_commit": "132599ebbd8d22d1b1bd5ea703a6d3bc493edd71",
   "cef_rs_commit": "9aa78c450489eddb828eb982eaee6c104a89d348",
-  "ironrdp_commit": "692c34cf429a704f7bc5d99188b5be6b961043d7",
+  "ironrdp_commit": "64168d204f4369b6657b233bf7e6121c5acc0271",
   "automate_git_blob": "9c0a6695396ae8397a17c4a406ae8f9becf1fa29"
 }
