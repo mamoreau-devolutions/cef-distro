@@ -101,7 +101,7 @@ disk (see CEF's
 
 ```sh
 pwsh scripts/sync.ps1 -Directory /new/owned/dir -Target linux-x64
-python3 scripts/cef.py build --directory /new/owned/dir --target linux-x64
+pwsh scripts/build.ps1 -Directory /new/owned/dir -Target linux-x64 -Deadline 4102444800
 pwsh scripts/distrib.ps1 -Directory /new/owned/dir -Target linux-x64
 ```
 

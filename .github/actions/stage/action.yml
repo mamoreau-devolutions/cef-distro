@@ -168,8 +168,10 @@ runs:
 
     - name: Build until deadline
       id: build
-      shell: bash
-      run: python scripts/cef.py build --directory "$CEF_TREE" --target "${{ inputs.target }}" --deadline "$CEF_DEADLINE"
+      shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
+      run: ./scripts/build.ps1 -Directory $env:CEF_TREE -Target $env:TARGET -Deadline $env:CEF_DEADLINE
 
     - name: Create minimal distribution and verify patched exports
       if: steps.build.outputs.complete == 'true'
