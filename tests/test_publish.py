@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -46,6 +47,15 @@ class PublishTests(unittest.TestCase):
             candidate(root, "windows-x64", pins={**cef.PINS, "cef_commit": "0" * 40})
             with self.assertRaisesRegex(ValueError, "different pins"):
                 publish.assemble([root], ["windows-x64"], root / "out")
+
+    def test_rejects_checkout_with_different_patch_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            candidate(root, "linux-x64")
+            with patch.dict(cef.PATCH_BLOBS, {"isolated-clipboard.patch": "0" * 40}):
+                with self.assertRaisesRegex(ValueError, "Patch differs from recorded blob"):
+                    publish.assemble([root], ["linux-x64"], root / "out")
+            self.assertFalse((root / "out").exists())
 
 
 if __name__ == "__main__":

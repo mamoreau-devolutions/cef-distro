@@ -36,6 +36,7 @@ def verify(candidate, target):
 
 
 def assemble(sources, targets, output):
+    cef.verify_patch_identity()
     output.mkdir(parents=True)
     sums = []
     for target in targets:
