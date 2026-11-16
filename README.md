@@ -47,6 +47,8 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
 
 - `targets`: JSON list from `linux-x64`, `linux-arm64`, `windows-x64`,
   `windows-arm64`, `macos-x64`, `macos-arm64` (default: all six).
+- `skip-macos`: drop the macOS targets from `targets`. macOS builds are
+  deferred, not removed; leave this unset to build macOS again.
 - `publish`: create one prerelease when every requested target succeeds.
 - `stage-minutes`: build time per stage (default 280; lower only to test
   resumption).
@@ -84,7 +86,8 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    essential files. It then publishes a prerelease tagged
    `cef-<cef version>-patched.<run id>`. Dispatch **Publish release** directly
    with a JSON list of run IDs to assemble targets built by different runs
-   (earlier runs win). Set `dry-run` to verify without publishing.
+   (earlier runs win). Set `dry-run` to verify without publishing, and
+   `skip-macos` to release only Linux and Windows while macOS is pending.
 
 Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
 `windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and

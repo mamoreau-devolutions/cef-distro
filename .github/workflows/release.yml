@@ -11,6 +11,9 @@ on:
       dry-run:
         type: boolean
         default: false
+      skip-macos:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       runs:
@@ -25,23 +28,44 @@ on:
         description: Verify candidates without publishing a release
         type: boolean
         default: false
+      skip-macos:
+        description: Drop macOS targets from the list (macOS builds are deferred, not removed)
+        type: boolean
+        default: false
 permissions:
   contents: write
   actions: read
 jobs:
-  native-smoke:
+  plan:
     if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: targets
+        shell: pwsh
+        env:
+          TARGETS: ${{ inputs.targets }}
+          SKIP_MACOS: ${{ inputs.skip-macos }}
+        run: |
+          $targets = ./scripts/targets.ps1 -Targets $env:TARGETS -SkipMacOS:($env:SKIP_MACOS -eq 'true')
+          "targets=$targets" >> $env:GITHUB_OUTPUT
+
+  native-smoke:
+    needs: plan
     permissions:
       contents: read
       actions: read
     uses: ./.github/workflows/runtime-smoke.yml
     with:
       runs: ${{ inputs.runs }}
-      targets: ${{ inputs.targets }}
+      targets: ${{ needs.plan.outputs.targets }}
 
   release:
-    needs: native-smoke
-    if: github.ref == 'refs/heads/master'
+    needs: [plan, native-smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -63,7 +87,7 @@ jobs:
         shell: pwsh
         env:
           RUNS: ${{ inputs.runs }}
-          TARGETS: ${{ inputs.targets }}
+          TARGETS: ${{ needs.plan.outputs.targets }}
         run: |
           $ErrorActionPreference = 'Stop'
           $sources = @(ConvertFrom-Json -InputObject $env:RUNS | ForEach-Object { Join-Path 'candidates' "$_" })
@@ -78,7 +102,7 @@ jobs:
           path: cef-rs
       - name: Smoke-test real archives with the pinned cef-rs exporter
         env:
-          TARGETS: ${{ inputs.targets }}
+          TARGETS: ${{ needs.plan.outputs.targets }}
         run: |
           set -euo pipefail
           for target in $(echo "$TARGETS" | jq -r '.[]'); do
@@ -116,7 +140,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUNS: ${{ inputs.runs }}
-          TARGETS: ${{ inputs.targets }}
+          TARGETS: ${{ needs.plan.outputs.targets }}
         run: |
           set -euo pipefail
           version=$(jq -r .cef_version pins.json)
@@ -131,6 +155,10 @@ jobs:
             echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
             echo "CI also smoke-tested importing each archive with the pinned cef-rs exporter and checked the library architecture."
             echo "Native CI loaded each library and checked the disabled-clipboard getters without initializing CEF. This is not a substitute for the IronRDP native tests."
+            if ! echo "$TARGETS" | jq -e 'any(.[]; startswith("macos-"))' >/dev/null; then
+              echo
+              echo "macOS is not included in this release; macOS builds are pending."
+            fi
           } > notes.md
           gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
             --title "Patched CEF ${version%%+*} (build ${GITHUB_RUN_ID})" --notes-file notes.md \

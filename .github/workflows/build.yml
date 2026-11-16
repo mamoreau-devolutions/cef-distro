@@ -6,6 +6,10 @@ on:
         description: JSON list of targets to build
         type: string
         default: '["linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "macos-x64", "macos-arm64"]'
+      skip-macos:
+        description: Drop macOS targets from the list (macOS builds are deferred, not removed)
+        type: boolean
+        default: false
       publish:
         description: Publish a prerelease when every requested target succeeds
         type: boolean
@@ -25,12 +29,28 @@ concurrency:
   group: build-${{ github.ref }}-${{ inputs.targets }}
   cancel-in-progress: false
 jobs:
-  build:
+  plan:
     if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - id: targets
+        shell: pwsh
+        env:
+          TARGETS: ${{ inputs.targets }}
+          SKIP_MACOS: ${{ inputs.skip-macos }}
+        run: |
+          $targets = ./scripts/targets.ps1 -Targets $env:TARGETS -SkipMacOS:($env:SKIP_MACOS -eq 'true')
+          "targets=$targets" >> $env:GITHUB_OUTPUT
+
+  build:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(inputs.targets) }}
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     name: ${{ matrix.target }}
     uses: ./.github/workflows/build-target.yml
     with:
@@ -39,7 +59,7 @@ jobs:
       resume-run: ${{ inputs.resume-run }}
 
   release:
-    needs: build
+    needs: [plan, build]
     if: inputs.publish
     permissions:
       contents: write
@@ -47,4 +67,4 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       runs: '[${{ github.run_id }}]'
-      targets: ${{ inputs.targets }}
+      targets: ${{ needs.plan.outputs.targets }}
