@@ -37,6 +37,8 @@ try {
         throw 'Expected a distribution failure'
     } catch {
         if ($_.Exception.Message -notlike '*exit code 17*') { throw }
+    } finally {
+        $global:LASTEXITCODE = 0
     }
     Write-Host 'PowerShell distribution invocation checks passed.'
 } finally {
