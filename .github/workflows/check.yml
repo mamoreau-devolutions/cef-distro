@@ -13,7 +13,9 @@ jobs:
       - name: Check patch applicability against pinned sources
         run: python3 scripts/cef.py check-patches
       - name: Check orchestration
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          pwsh -File scripts/stages.ps1 -Check
+          python3 -m unittest discover -s tests -v
       - name: Hosted runner capacity
         run: |
           df -h .

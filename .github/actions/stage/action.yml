@@ -152,7 +152,17 @@ runs:
     - name: Restore previous tree
       if: steps.source.outputs.name != ''
       shell: bash
-      run: python scripts/cef.py unpack --parts "$CEF_PARTS/in" --directory "$CEF_TREE"
+      run: |
+        set -euo pipefail
+        if [ ! -f "$CEF_PARTS/in/host-arch.txt" ]; then
+          echo "::error::Saved tree has no host architecture metadata; start a fresh build."
+          exit 1
+        fi
+        if [ "$(tr -d '\r\n' < "$CEF_PARTS/in/host-arch.txt")" != "$(uname -m)" ]; then
+          echo "::error::Saved tree was built on a different host architecture; start a fresh build."
+          exit 1
+        fi
+        python scripts/cef.py unpack --parts "$CEF_PARTS/in" --directory "$CEF_TREE"
 
     - name: Build until deadline
       id: build
@@ -187,6 +197,7 @@ runs:
         set -euo pipefail
         df -h "$CEF_TREE" || true
         python scripts/cef.py pack --directory "$CEF_TREE" --output "$CEF_PARTS/out"
+        uname -m > "$CEF_PARTS/out/host-arch.txt"
         ls -la "$CEF_PARTS/out"
 
     - name: Upload tree
