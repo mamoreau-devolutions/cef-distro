@@ -60,15 +60,14 @@ jobs:
           pattern: native-smoke-*
           path: native-smoke
       - name: Verify and assemble candidates
+        shell: pwsh
         env:
           RUNS: ${{ inputs.runs }}
           TARGETS: ${{ inputs.targets }}
         run: |
-          set -euo pipefail
-          sources=()
-          for run in $(echo "$RUNS" | jq -r '.[]'); do sources+=(--source "candidates/$run"); done
-          python3 scripts/publish.py "${sources[@]}" --targets "$TARGETS" \
-            --smoke-proofs native-smoke --output release
+          $ErrorActionPreference = 'Stop'
+          $sources = @(ConvertFrom-Json -InputObject $env:RUNS | ForEach-Object { Join-Path 'candidates' "$_" })
+          & ./scripts/publish.ps1 -Source $sources -Targets $env:TARGETS -SmokeProofs 'native-smoke' -Output 'release'
       - name: Read exporter revision
         id: pins
         run: echo "cef_rs=$(jq -r .cef_rs_commit pins.json)" >> "$GITHUB_OUTPUT"
