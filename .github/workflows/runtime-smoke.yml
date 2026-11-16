@@ -46,9 +46,9 @@ jobs:
           set -euo pipefail
           name="candidate-$TARGET"
           found=false
-          for run in $(echo "$RUNS" | jq -r '.[]'); do
+          for run in $(echo "$RUNS" | jq -r '.[]' | tr -d '\r'); do
             names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.expired == false) | .name')
+              --jq '.artifacts[] | select(.expired == false) | .name' | tr -d '\r')
             if printf '%s\n' "$names" | grep -Fxq "$name"; then
               gh run download "$run" -R "$GITHUB_REPOSITORY" -n "$name" -D candidate
               found=true
