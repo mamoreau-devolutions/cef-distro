@@ -36,6 +36,11 @@ jobs:
           ./tests/test_release.ps1
           ./tests/test_sync.ps1
           ./tests/test_build.ps1
+          ./tests/test_tree.ps1
+      - name: Check Windows tree serialization
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test_windows_tree.ps1
   exporter-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
