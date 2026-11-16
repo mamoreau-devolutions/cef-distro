@@ -116,7 +116,7 @@ New-Item -ItemType Directory -Path $temp | Out-Null
 try {
     $binary = Join-Path $temp $library
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = (Get-Command tar -CommandType Application).Source
+    $start.FileName = (Get-Command tar -CommandType Application | Select-Object -First 1).Source
     foreach ($arg in @('-xOf', $archive, '--', $candidates[0])) { [void]$start.ArgumentList.Add($arg) }
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
