@@ -12,6 +12,10 @@ try {
     [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
     [IO.File]::WriteAllBytes($file, $bytes)
     [IO.File]::WriteAllBytes((Join-Path $source 'empty'), [byte[]]@())
+    $deep = $source
+    for ($i = 0; $i -lt 15; $i++) { $deep = Join-Path $deep ('directory_component_{0:D2}' -f $i) }
+    New-Item -ItemType Directory -Force -Path $deep | Out-Null
+    [IO.File]::WriteAllText((Join-Path $deep 'file.txt'), 'deep')
     if ($IsWindows) {
         New-Item -ItemType HardLink -Path (Join-Path $source 'hard.o') -Target $file | Out-Null
         New-Item -ItemType Junction -Path (Join-Path $source 'junction') -Target (Join-Path $source 'out') | Out-Null
@@ -38,6 +42,8 @@ try {
     }
     if (-not (Test-Path -LiteralPath (Join-Path $restored 'empty')) -or
         (Get-Item -LiteralPath (Join-Path $restored 'empty')).Length -ne 0) { throw 'Empty file was not restored' }
+    $deepCopy = Join-Path $restored ([IO.Path]::GetRelativePath($source, (Join-Path $deep 'file.txt')))
+    if ([IO.File]::ReadAllText($deepCopy) -cne 'deep') { throw 'Deep path was not restored' }
     $legacy = Join-Path $repo 'scripts' 'cef.py'
     $parts = Join-Path $temp 'legacy-parts'
     & python $legacy pack --directory $source --output $parts --part-size 1024

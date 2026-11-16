@@ -8,63 +8,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, windows-2025, macos-15-intel]
+        runner: [ubuntu-24.04, windows-2025, macos-26]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - name: Pack and unpack a tree with deep paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/ptree"
-          deep="$root/$(printf 'directory_component_%02d/' $(seq 1 15))"
-          mkdir -p "$deep"
-          echo deep > "$deep/file.txt"
-          echo top > "$root/top.txt"
-          ln -s top.txt "$root/link.txt" || true
-          python - "$root" <<'PY'
-          import os, sys
-          for i in range(2000):
-              path = os.path.join(sys.argv[1], "many", f"{i // 100}", f"f{i}.o")
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              with open(path, "wb") as f:
-                  f.write(os.urandom(4096))
-          PY
-          python scripts/cef.py pack --directory "$root" --output "$RUNNER_TEMP/parts"
-          ls -la "$RUNNER_TEMP/parts"
-          python scripts/cef.py unpack --parts "$RUNNER_TEMP/parts" --directory "$RUNNER_TEMP/restored"
-          python - "$root" "$RUNNER_TEMP/restored" <<'PY'
-          import os, sys
-          a, b = sys.argv[1:]
-          bad = 0
-          for d, _, files in os.walk(a):
-              for name in files:
-                  p = os.path.join(d, name)
-                  q = os.path.join(b, os.path.relpath(p, a))
-                  if os.lstat(p).st_mtime_ns != os.lstat(q).st_mtime_ns:
-                      bad += 1
-          print("mtime mismatches:", bad)
-          sys.exit(1 if bad else 0)
-          PY
-      - name: Pack a tree with an exclusively locked file (Windows)
+      - name: Check tree round trip
+        shell: pwsh
+        run: ./tests/test_tree.ps1
+      - name: Check Windows tree serialization
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $root = "$env:RUNNER_TEMP\locked"
-          New-Item -ItemType Directory $root | Out-Null
-          'x' | Set-Content "$root\a.txt"
-          New-Item -ItemType Directory "$root\target" | Out-Null
-          'y' | Set-Content "$root\target\b.txt"
-          cmd /c mklink /J "$root\junction" "$root\target"
-          cmd /c mklink "$root\filelink.txt" "$root\a.txt"
-          python scripts/cef.py pack --directory $root --output "$env:RUNNER_TEMP\jparts"
-          "links exit $LASTEXITCODE"
-          $lock = [IO.File]::Open("$root\a.txt", 'Open', 'Read', 'None')
-          python scripts/cef.py pack --directory $root --output "$env:RUNNER_TEMP\lparts"
-          "exit $LASTEXITCODE"
-          $lock.Close()
-          exit 0
+        run: ./tests/test_windows_tree.ps1
