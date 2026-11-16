@@ -106,6 +106,7 @@ if ($Mode -eq 'pack') {
     try {
         if ($IsWindows) {
             Read-CefWindowsTree $decompress.StandardOutput.BaseStream $Directory
+            $decompress.StandardOutput.BaseStream.CopyTo([IO.Stream]::Null)
         } else {
             $tarProcess = Start-StreamProcess $tar @('-xf', '-', '-C', $Directory) $true $false
             $decompress.StandardOutput.BaseStream.CopyTo($tarProcess.StandardInput.BaseStream)
