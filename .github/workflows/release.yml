@@ -29,7 +29,18 @@ permissions:
   contents: write
   actions: read
 jobs:
+  native-smoke:
+    if: github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/runtime-smoke.yml
+    with:
+      runs: ${{ inputs.runs }}
+      targets: ${{ inputs.targets }}
+
   release:
+    needs: native-smoke
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
@@ -114,7 +125,7 @@ jobs:
             echo
             echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
             echo "CI also smoke-tested importing each archive with the pinned cef-rs exporter and checked the library architecture."
-            echo "Runtime behavior has **not** been validated by CI. Run the IronRDP native tests before relying on a platform."
+            echo "Native CI loaded each library and checked the disabled-clipboard getters without initializing CEF. This is not a substitute for the IronRDP native tests."
           } > notes.md
           gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
             --title "Patched CEF ${version%%+*} (build ${GITHUB_RUN_ID})" --notes-file notes.md \

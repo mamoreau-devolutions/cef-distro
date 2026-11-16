@@ -5,11 +5,12 @@ GitHub Actions builds pinned upstream CEF/Chromium with the IronRDP patches on
 free GitHub-hosted runners and publishes the unmodified CEF `--minimal`
 distributions as GitHub prereleases for a cef-rs fork to consume.
 
-CI verifies patch identity, pinned checkouts and the patched `libcef`
-exports. **It does not validate runtime behavior.** Only the upstream IronRDP
-custom build on macOS ARM64 has been validated at runtime; run IronRDP's
-native tests (`e2e.py`, `clipboard.py`, `devices.py`, `shutdown.py`) before
-relying on any other platform.
+CI verifies patch identity, pinned checkouts and the patched `libcef` exports.
+Before publishing, it also loads each library on a native runner and checks
+the disabled-clipboard getters without initializing CEF. **It does not run
+IronRDP's native tests.** Only the upstream IronRDP custom build on macOS
+ARM64 has been validated at runtime; run those tests (`e2e.py`, `clipboard.py`,
+`devices.py`, `shutdown.py`) before relying on any other platform.
 
 ## Pins and provenance
 
@@ -72,22 +73,22 @@ into `build-target.yml` (regenerate with `python scripts/stages.py`):
    `scripts/release.py` checks the standard archive name and top-level
    directory, and verifies the 14 patched exports in `libcef`. The candidate
    archive, `SHA256SUMS` and `manifest.json` are uploaded.
-5. The **release** job (`release.yml`) checks every candidate's checksum and
-   that its manifest carries this checkout's pins and patch blobs. It imports
-   each archive with the pinned cef-rs exporter and checks the resulting
-   library's architecture and essential files, then publishes a prerelease
-   tagged `cef-<cef version>-patched.<run id>`. Dispatch **Publish release**
-   directly with a JSON list of run IDs to assemble targets built by different
-   runs (earlier runs win). Set `dry-run` to verify without publishing.
+5. The **release** workflow (`release.yml`) first checks that each patched
+   library loads on a native runner. It checks every candidate's checksum and
+   that its manifest carries this checkout's pins and patch blobs, imports each
+   archive with the pinned cef-rs exporter, and checks the resulting library's
+   architecture and essential files. It then publishes a prerelease tagged
+   `cef-<cef version>-patched.<run id>`. Dispatch **Publish release** directly
+   with a JSON list of run IDs to assemble targets built by different runs
+   (earlier runs win). Set `dry-run` to verify without publishing.
 
 Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
 `windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and
 `macos-15-intel` (newest Xcode 26). The build is an official configuration
 without ThinLTO, PGO, CFI or symbols (`GN_COMMON` in `scripts/cef.py`), which
 keeps links within hosted memory; no codec or branding flags are set. A full
-six-target build takes roughly 15–25 hours and needs only a public repository's
-free minutes. Tree artifacts (~13 GB per stage) are kept for 7 days and
-candidates for 14 days.
+six-target build can take multiple days depending on runner performance. Tree
+artifacts (~13 GB per stage) are kept for 7 days and candidates for 14 days.
 
 Locally, on a native trusted machine with at least 16 GiB RAM and 200 GiB free
 disk (see CEF's
