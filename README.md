@@ -38,7 +38,7 @@ when changing patches.
 | 4 | Chromium | `in-process-audio-shutdown.patch` |
 | 5 | Chromium, POSIX only | `disable-chromium-shutdown-signals.patch` |
 
-`python3 scripts/cef.py check-patches` (run by the `Check` workflow) fetches
+`pwsh scripts/check-patches.ps1` (run by the `Check` workflow) fetches
 only the touched pinned upstream files and applies all patches in order.
 
 ## Building in GitHub Actions
