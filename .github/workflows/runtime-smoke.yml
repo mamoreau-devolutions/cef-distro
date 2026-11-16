@@ -1,0 +1,111 @@
+name: Native candidate smoke
+on:
+  workflow_call:
+    inputs:
+      runs:
+        type: string
+        required: true
+      targets:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: JSON list of build run IDs to search for candidates
+        type: string
+        required: true
+      targets:
+        description: JSON list of targets to smoke-test
+        type: string
+        default: '["linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "macos-x64", "macos-arm64"]'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  smoke:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+    runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04-arm","windows-x64":"windows-2025","windows-arm64":"windows-11-arm","macos-x64":"macos-15-intel","macos-arm64":"macos-26"}')[matrix.target] }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          architecture: ${{ endsWith(matrix.target, 'arm64') && 'arm64' || 'x64' }}
+      - name: Download candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNS: ${{ inputs.runs }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          name="candidate-$TARGET"
+          found=false
+          for run in $(echo "$RUNS" | jq -r '.[]'); do
+            names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.expired == false) | .name')
+            if printf '%s\n' "$names" | grep -Fxq "$name"; then
+              gh run download "$run" -R "$GITHUB_REPOSITORY" -n "$name" -D candidate
+              found=true
+              break
+            fi
+          done
+          if [ "$found" != true ]; then echo "::error::No candidate for $TARGET"; exit 1; fi
+      - name: Load patched library and check disabled clipboard state
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python - "$TARGET" <<'PY'
+          import os
+          import platform
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tarfile
+          import tempfile
+
+          sys.path.insert(0, str(Path.cwd() / "scripts"))
+          import cef
+          import publish
+
+          target = sys.argv[1]
+          system, architecture = target.split("-")
+          expected_system = {"linux": "Linux", "windows": "Windows", "macos": "Darwin"}[system]
+          expected_machine = {"x64": {"x86_64", "amd64"}, "arm64": {"arm64", "aarch64"}}[architecture]
+          if platform.system() != expected_system or platform.machine().lower() not in expected_machine:
+              raise RuntimeError(f"Native runner required for {target}, got {platform.system()} {platform.machine()}")
+          cef.verify_patch_identity()
+          _, archive = publish.verify(Path("candidate"), target)
+          with tempfile.TemporaryDirectory(prefix="cef-native-smoke-") as directory:
+              with tarfile.open(archive, "r:bz2") as tar:
+                  tar.extractall(directory, filter="data")
+              release = Path(directory) / archive.name.removesuffix(".tar.bz2") / "Release"
+              library = {
+                  "linux": release / "libcef.so",
+                  "windows": release / "libcef.dll",
+                  "macos": release / "Chromium Embedded Framework.framework" / "Chromium Embedded Framework",
+              }[system]
+              env = dict(os.environ)
+              if system == "linux":
+                  env["LD_LIBRARY_PATH"] = str(release) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+              probe = """
+          import ctypes, os, sys
+          if os.name == "nt":
+              os.add_dll_directory(sys.argv[2])
+          lib = ctypes.CDLL(sys.argv[1])
+          lib.cef_isolated_clipboard_enabled.restype = ctypes.c_int
+          lib.cef_isolated_clipboard_generation.restype = ctypes.c_int64
+          enabled = lib.cef_isolated_clipboard_enabled()
+          generation = lib.cef_isolated_clipboard_generation()
+          if enabled != 0 or generation != -2:
+              raise RuntimeError(f"Unexpected clipboard state: enabled={enabled}, generation={generation}")
+          print(f"Native patched library loaded: clipboard enabled={enabled}, generation={generation}")
+          """
+              subprocess.run([sys.executable, "-c", probe, str(library), str(release)], env=env, check=True)
+          PY
