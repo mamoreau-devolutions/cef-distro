@@ -5,6 +5,8 @@ function Set-CefBuildEnvironment([string]$Directory, [string]$Target) {
     $platform, $arch = $Target.Split('-')
     $hostPlatform = if ($IsWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'linux' }
     if ($platform -cne $hostPlatform) { throw "$Target must be built on $platform, not $hostPlatform" }
+    # Chromium's bindgen rejects an inherited TARGET environment variable.
+    Remove-Item Env:TARGET -ErrorAction SilentlyContinue
     $depotTools = Join-Path $Directory 'depot_tools'
     $env:PATH = "$depotTools$([IO.Path]::PathSeparator)$env:PATH"
     $env:GN_OUT_CONFIGS = "Release_GN_$arch"

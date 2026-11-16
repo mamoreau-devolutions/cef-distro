@@ -15,11 +15,18 @@ New-Item -ItemType Directory -Force -Path $ninjaDirectory, $outputDirectory | Ou
 $ninjaName = if ($IsWindows) { 'ninja.exe' } else { 'ninja' }
 Copy-Item -LiteralPath $ninjaSource -Destination (Join-Path $ninjaDirectory $ninjaName)
 $previousOutput = $env:GITHUB_OUTPUT
+$previousTarget = $env:TARGET
 $env:GITHUB_OUTPUT = Join-Path $temp 'outputs'
 $platform = if ($IsWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'linux' }
 $targets = if ($IsWindows) { 'cefclient bootstrap bootstrapc' } elseif ($IsMacOS) { 'cefclient' } else { 'cefsimple chrome_sandbox' }
 try {
-    Set-Content -Encoding ascii -LiteralPath (Join-Path $outputDirectory 'build.ninja') -Value "build $targets`: phony"
+    $env:TARGET = 'inherited-target'
+    @"
+rule check_environment
+  command = pwsh -NoProfile -Command "if (Test-Path Env:TARGET) { exit 19 }"
+build checked: check_environment
+build $targets`: phony checked
+"@ | Set-Content -Encoding ascii -LiteralPath (Join-Path $outputDirectory 'build.ninja')
     & $buildScript -Directory $temp -Target "$platform-x64" -Deadline ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 30)
     if ((Get-Content -LiteralPath $env:GITHUB_OUTPUT | Select-Object -Last 1) -cne 'complete=true') {
         throw 'Completed build was not reported'
@@ -48,5 +55,6 @@ build $targets`: phony failed
     Write-Host 'PowerShell ninja completion and interruption checks passed.'
 } finally {
     $env:GITHUB_OUTPUT = $previousOutput
+    $env:TARGET = $previousTarget
     Remove-Item -LiteralPath $temp -Recurse -Force
 }
