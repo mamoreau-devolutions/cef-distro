@@ -12,6 +12,10 @@ try {
     [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
     [IO.File]::WriteAllBytes($file, $bytes)
     [IO.File]::WriteAllBytes((Join-Path $source 'empty'), [byte[]]@())
+    if ($IsWindows) {
+        New-Item -ItemType HardLink -Path (Join-Path $source 'hard.o') -Target $file | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $source 'junction') -Target (Join-Path $source 'out') | Out-Null
+    }
     $stamp = [DateTime]::new(638355968001234567, [DateTimeKind]::Utc)
     [IO.File]::SetLastWriteTimeUtc($file, $stamp)
     $link = Join-Path $source 'link.o'
@@ -44,6 +48,11 @@ try {
     if ([IO.File]::GetLastWriteTimeUtc($legacyCopy).Ticks -ne [IO.File]::GetLastWriteTimeUtc($file).Ticks -or
         [Convert]::ToHexString([IO.File]::ReadAllBytes($legacyCopy)) -cne [Convert]::ToHexString($bytes)) {
         throw 'PowerShell did not restore the legacy tree'
+    }
+    if ($IsWindows -and
+        (-not (Get-Item -LiteralPath (Join-Path $legacyRestored 'junction') -Force).LinkTarget -or
+         [Convert]::ToHexString([IO.File]::ReadAllBytes((Join-Path $legacyRestored 'hard.o'))) -cne [Convert]::ToHexString($bytes))) {
+        throw 'PowerShell did not restore legacy junction or hard link'
     }
     $parts = Join-Path $temp 'reverse-parts'
     & $tree -Mode pack -Directory $source -Output $parts -PartSize 1024
