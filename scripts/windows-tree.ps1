@@ -1,107 +1,135 @@
-function Write-CefWindowsTree([string]$Directory, [IO.Stream]$Stream) {
-    $writer = [System.Formats.Tar.TarWriter]::new($Stream, [System.Formats.Tar.TarEntryFormat]::Pax, $true)
-    try {
-        $count = 0
-        $pending = [Collections.Generic.Stack[string]]::new()
-        $pending.Push($Directory)
-        while ($pending.Count) {
-            $folder = $pending.Pop()
-            foreach ($path in [IO.Directory]::EnumerateFileSystemEntries($folder)) {
-                $item = Get-Item -LiteralPath $path -Force
-                $relative = [IO.Path]::GetRelativePath($Directory, $path).Replace('\', '/')
-                $isLink = ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-                $extra = [Collections.Generic.Dictionary[string,string]]::new()
-                if ($isLink -and $item.PSIsContainer) { $extra['CEF.directory_link'] = '1' }
-                $type = if ($isLink) {
-                    [System.Formats.Tar.TarEntryType]::SymbolicLink
-                } elseif ($item.PSIsContainer) {
-                    [System.Formats.Tar.TarEntryType]::Directory
-                } else {
-                    [System.Formats.Tar.TarEntryType]::RegularFile
-                }
-                $entry = [System.Formats.Tar.PaxTarEntry]::new($type, $relative, $extra)
-                $entry.ModificationTime = [DateTimeOffset]::new($item.LastWriteTimeUtc)
-                if ($isLink) {
-                    if (-not $item.LinkTarget) { throw "Cannot read link target: $path" }
-                    $entry.LinkName = $item.LinkTarget
-                    $writer.WriteEntry($entry)
-                } elseif ($item.PSIsContainer) {
-                    $writer.WriteEntry($entry)
-                    $pending.Push($path)
-                } else {
-                    $file = [IO.File]::OpenRead($path)
-                    try {
-                        $entry.DataStream = $file
-                        $writer.WriteEntry($entry)
-                    } finally {
-                        $file.Dispose()
+if (-not ('CefWindowsTree' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Formats.Tar;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public static class CefWindowsTree
+{
+    const string DirectoryLink = "CEF.directory_link";
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateHardLinkW(string fileName, string existingFileName, IntPtr securityAttributes);
+
+    public static long Write(string root, Stream stream)
+    {
+        long count = 0;
+        using (var writer = new TarWriter(stream, TarEntryFormat.Pax, true))
+        {
+            var pending = new Stack<DirectoryInfo>();
+            pending.Push(new DirectoryInfo(root));
+            while (pending.Count > 0)
+            {
+                foreach (var item in pending.Pop().EnumerateFileSystemInfos())
+                {
+                    string relative = Path.GetRelativePath(root, item.FullName).Replace('\\', '/');
+                    bool isLink = (item.Attributes & FileAttributes.ReparsePoint) != 0;
+                    bool isDirectory = (item.Attributes & FileAttributes.Directory) != 0;
+                    var extra = new Dictionary<string, string>();
+                    if (isLink && isDirectory) extra[DirectoryLink] = "1";
+                    var type = isLink ? TarEntryType.SymbolicLink
+                        : isDirectory ? TarEntryType.Directory : TarEntryType.RegularFile;
+                    var entry = new PaxTarEntry(type, relative, extra);
+                    entry.ModificationTime = new DateTimeOffset(item.LastWriteTimeUtc);
+                    if (isLink)
+                    {
+                        if (string.IsNullOrEmpty(item.LinkTarget)) throw new IOException("Cannot read link target: " + item.FullName);
+                        entry.LinkName = item.LinkTarget;
+                        writer.WriteEntry(entry);
                     }
+                    else if (isDirectory)
+                    {
+                        writer.WriteEntry(entry);
+                        pending.Push((DirectoryInfo)item);
+                    }
+                    else
+                    {
+                        using (var file = new FileStream(item.FullName, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20))
+                        {
+                            entry.DataStream = file;
+                            writer.WriteEntry(entry);
+                        }
+                    }
+                    if (++count % 50000 == 0) Console.WriteLine("Archived " + count + " entries; last: " + relative);
                 }
-                $count++
-                if ($count % 10000 -eq 0) { Write-Host "Archived $count entries; last: $relative" }
             }
         }
-    } finally {
-        $writer.Dispose()
+        return count;
     }
+
+    static string SafePath(string root, string name, string what)
+    {
+        name = name.Replace('\\', '/');
+        string[] parts = name.Split('/');
+        if (Path.IsPathRooted(name) || Array.IndexOf(parts, "..") >= 0 ||
+            (parts[0].Length >= 2 && parts[0][1] == ':' && char.IsLetter(parts[0][0])))
+            throw new IOException("Unsafe " + what + ": " + name);
+        return Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    public static long Read(Stream stream, string root)
+    {
+        var times = new List<(string Path, DateTime Time, bool Directory)>();
+        using (var reader = new TarReader(stream, true))
+        {
+            TarEntry entry;
+            while ((entry = reader.GetNextEntry(false)) != null)
+            {
+                string target = SafePath(root, entry.Name, "tree entry");
+                Directory.CreateDirectory(Path.GetDirectoryName(target));
+                bool isLink = false;
+                switch (entry.EntryType)
+                {
+                    case TarEntryType.RegularFile:
+                    case TarEntryType.V7RegularFile:
+                        using (var file = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20))
+                        {
+                            if (entry.DataStream != null) entry.DataStream.CopyTo(file);
+                        }
+                        break;
+                    case TarEntryType.Directory:
+                        Directory.CreateDirectory(target);
+                        break;
+                    case TarEntryType.SymbolicLink:
+                        isLink = true;
+                        string flag;
+                        var pax = entry as PaxTarEntry;
+                        if (pax != null && pax.ExtendedAttributes.TryGetValue(DirectoryLink, out flag) && flag == "1")
+                            Directory.CreateSymbolicLink(target, entry.LinkName);
+                        else
+                            File.CreateSymbolicLink(target, entry.LinkName);
+                        break;
+                    case TarEntryType.HardLink:
+                        string existing = SafePath(root, entry.LinkName, "hard link");
+                        if (!CreateHardLinkW(target, existing, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot create hard link " + target);
+                        break;
+                    default:
+                        throw new IOException("Unsupported tree entry type " + entry.EntryType + ": " + entry.Name);
+                }
+                if (!isLink) times.Add((target, entry.ModificationTime.UtcDateTime, entry.EntryType == TarEntryType.Directory));
+                if (times.Count % 50000 == 0 && !isLink) Console.WriteLine("Restored " + times.Count + " entries; last: " + entry.Name);
+            }
+        }
+        for (int i = times.Count - 1; i >= 0; i--)
+        {
+            if (times[i].Directory) Directory.SetLastWriteTimeUtc(times[i].Path, times[i].Time);
+            else File.SetLastWriteTimeUtc(times[i].Path, times[i].Time);
+        }
+        return times.Count;
+    }
+}
+"@
+}
+
+function Write-CefWindowsTree([string]$Directory, [IO.Stream]$Stream) {
+    $count = [CefWindowsTree]::Write($Directory, $Stream)
+    Write-Host "Archived $count entries"
 }
 
 function Read-CefWindowsTree([IO.Stream]$Stream, [string]$Directory) {
-    $reader = [System.Formats.Tar.TarReader]::new($Stream, $true)
-    $times = [Collections.Generic.List[object]]::new()
-    try {
-        while ($entry = $reader.GetNextEntry($false)) {
-            $name = $entry.Name.Replace('\', '/')
-            $parts = $name.Split('/')
-            if ([IO.Path]::IsPathRooted($name) -or $parts -contains '..' -or
-                ($parts[0] -match '^[A-Za-z]:')) { throw "Unsafe tree entry: $name" }
-            $target = Join-Path $Directory ($name.Replace('/', [IO.Path]::DirectorySeparatorChar))
-            $parent = Split-Path $target -Parent
-            [IO.Directory]::CreateDirectory($parent) | Out-Null
-            $isLink = $false
-            switch ($entry.EntryType) {
-                { $_ -in @([System.Formats.Tar.TarEntryType]::RegularFile, [System.Formats.Tar.TarEntryType]::V7RegularFile) } {
-                    $file = [IO.File]::Create($target)
-                    try {
-                        if ($entry.DataStream) { $entry.DataStream.CopyTo($file) }
-                    } finally { $file.Dispose() }
-                }
-                ([System.Formats.Tar.TarEntryType]::Directory) {
-                    [IO.Directory]::CreateDirectory($target) | Out-Null
-                }
-                ([System.Formats.Tar.TarEntryType]::SymbolicLink) {
-                    $isLink = $true
-                    $directoryLink = $entry -is [System.Formats.Tar.PaxTarEntry] -and
-                        $entry.ExtendedAttributes.ContainsKey('CEF.directory_link') -and
-                        $entry.ExtendedAttributes['CEF.directory_link'] -ceq '1'
-                    if ($directoryLink) {
-                        [IO.Directory]::CreateSymbolicLink($target, $entry.LinkName) | Out-Null
-                    } else {
-                        [IO.File]::CreateSymbolicLink($target, $entry.LinkName) | Out-Null
-                    }
-                }
-                ([System.Formats.Tar.TarEntryType]::HardLink) {
-                    $linkName = $entry.LinkName.Replace('\', '/')
-                    if ([IO.Path]::IsPathRooted($linkName) -or $linkName.Split('/') -contains '..' -or
-                        $linkName -match '^[A-Za-z]:') { throw "Unsafe hard link: $linkName" }
-                    $linkTarget = Join-Path $Directory ($linkName.Replace('/', [IO.Path]::DirectorySeparatorChar))
-                    New-Item -ItemType HardLink -Path $target -Target $linkTarget | Out-Null
-                }
-                default { throw "Unsupported tree entry type $($entry.EntryType): $name" }
-            }
-            if (-not $isLink) {
-                $times.Add([pscustomobject]@{ Path = $target; Time = $entry.ModificationTime.UtcDateTime; Type = $entry.EntryType })
-            }
-        }
-        for ($i = $times.Count - 1; $i -ge 0; $i--) {
-            $time = $times[$i]
-            if ($time.Type -eq [System.Formats.Tar.TarEntryType]::Directory) {
-                [IO.Directory]::SetLastWriteTimeUtc($time.Path, $time.Time)
-            } else {
-                [IO.File]::SetLastWriteTimeUtc($time.Path, $time.Time)
-            }
-        }
-    } finally {
-        $reader.Dispose()
-    }
+    $count = [CefWindowsTree]::Read($Stream, $Directory)
+    Write-Host "Restored $count entries"
 }
