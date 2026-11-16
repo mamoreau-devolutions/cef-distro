@@ -48,7 +48,8 @@ jobs:
           test "$(cat "$work/output/libcef.so")" = library
           test "$(cat "$work/output/chrome-sandbox")" = sandbox
           test "$(cat "$work/output/test.pak")" = resource
-          python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["type"] == "minimal" and p["name"] == sys.argv[2] and len(p["sha1"]) == 40' "$work/output/archive.json" "$name.tar.bz2"
+          ARCHIVE_JSON="$work/output/archive.json" ARCHIVE_NAME="$name.tar.bz2" pwsh -NoProfile -Command \
+            '$p = Get-Content -Raw -LiteralPath $env:ARCHIVE_JSON | ConvertFrom-Json; if ($p.type -cne "minimal" -or $p.name -cne $env:ARCHIVE_NAME -or $p.sha1.Length -ne 40) { throw "Invalid exporter archive metadata" }'
       - name: Exercise macOS framework symlink export
         shell: bash
         run: |
@@ -63,8 +64,8 @@ jobs:
             root="$work/$name"
             framework="$root/Release/Chromium Embedded Framework.framework"
             mkdir -p "$framework/Versions/A/Resources" "$root"/{cmake,include,libcef_dll}
-            python3 -c 'import struct,sys; open(sys.argv[1],"wb").write(struct.pack("<8I",0xfeedfacf,int(sys.argv[2],0),0,6,0,0,0,0))' \
-              "$framework/Versions/A/Chromium Embedded Framework" "$cpu"
+            MACHO_PATH="$framework/Versions/A/Chromium Embedded Framework" MACHO_CPU="$cpu" pwsh -NoProfile -Command \
+              '$words = [uint32[]]@([Convert]::ToUInt32("feedfacf", 16), [Convert]::ToUInt32($env:MACHO_CPU, 16), 0, 6, 0, 0, 0, 0); $bytes = [byte[]]::new(32); [Buffer]::BlockCopy($words, 0, $bytes, 0, 32); [IO.File]::WriteAllBytes($env:MACHO_PATH, $bytes)'
             ln -s A "$framework/Versions/Current"
             ln -s 'Versions/Current/Chromium Embedded Framework' "$framework/Chromium Embedded Framework"
             ln -s Versions/Current/Resources "$framework/Resources"
