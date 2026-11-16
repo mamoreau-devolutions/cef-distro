@@ -1,6 +1,7 @@
 function Write-CefWindowsTree([string]$Directory, [IO.Stream]$Stream) {
     $writer = [System.Formats.Tar.TarWriter]::new($Stream, [System.Formats.Tar.TarEntryFormat]::Pax, $true)
     try {
+        $count = 0
         $pending = [Collections.Generic.Stack[string]]::new()
         $pending.Push($Directory)
         while ($pending.Count) {
@@ -36,6 +37,8 @@ function Write-CefWindowsTree([string]$Directory, [IO.Stream]$Stream) {
                         $file.Dispose()
                     }
                 }
+                $count++
+                if ($count % 10000 -eq 0) { Write-Host "Archived $count entries; last: $relative" }
             }
         }
     } finally {

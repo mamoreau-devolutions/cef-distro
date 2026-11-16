@@ -56,6 +56,7 @@ if ($Mode -eq 'pack') {
             }
         } finally {
             if ($part) { $part.Dispose() }
+            $stream.Dispose()
         }
         return $count
     }
