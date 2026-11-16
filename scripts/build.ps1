@@ -100,7 +100,7 @@ try {
                 if ($IsWindows) {
                     [CefNinjaProcess]::Interrupt($process.Id)
                 } else {
-                    & kill -INT $process.Id
+                    & /bin/kill -INT $process.Id
                     if ($LASTEXITCODE -ne 0 -and -not $process.HasExited) { throw 'Interrupting ninja failed' }
                 }
             }
