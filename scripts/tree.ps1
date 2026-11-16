@@ -65,7 +65,7 @@ if ($Mode -eq 'pack') {
             Write-CefWindowsTree $Directory $compress.StandardInput.BaseStream
         } else {
             $format = if ($IsLinux) { @('--format=posix') } else { @('--format', 'pax') }
-            $tarProcess = Start-StreamProcess $tar ($format + @('-cf', '-', '-C', $Directory, '.')) $false $true
+            $tarProcess = Start-StreamProcess $tar (@($format) + @('-cf', '-', '-C', $Directory, '.')) $false $true
             $tarProcess.StandardOutput.BaseStream.CopyTo($compress.StandardInput.BaseStream)
             $tarProcess.WaitForExit()
             if ($tarProcess.ExitCode -ne 0) { throw "Tree tar failed: $($tarProcess.ExitCode)" }

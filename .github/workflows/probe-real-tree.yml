@@ -1,0 +1,54 @@
+name: Probe real Windows staged tree
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Build run containing a Windows tree artifact
+        required: true
+        type: string
+      artifact:
+        description: Exact tree artifact name
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Download staged tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.artifact }}
+          run-id: ${{ inputs.run }}
+          github-token: ${{ github.token }}
+          path: D:\cef-probe-parts\in
+      - name: Restore, repack and restore again
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tree = 'D:\cefb'
+          $parts = 'D:\cef-probe-parts\out'
+          ./scripts/tree.ps1 -Mode unpack -Parts 'D:\cef-probe-parts\in' -Directory $tree
+          $files = @(
+            'chromium\src\third_party\ninja\ninja.exe'
+            'chromium\src\cef\BUILD.gn'
+            'chromium\src\out\Release_GN_arm64\build.ninja'
+          )
+          $before = foreach ($name in $files) {
+            $item = Get-Item -LiteralPath (Join-Path $tree $name)
+            [pscustomobject]@{ Name = $name; Hash = (Get-FileHash -Algorithm SHA256 $item.FullName).Hash; Ticks = $item.LastWriteTimeUtc.Ticks }
+          }
+          ./scripts/tree.ps1 -Mode pack -Directory $tree -Output $parts
+          Remove-Item -LiteralPath $tree -Recurse -Force
+          ./scripts/tree.ps1 -Mode unpack -Parts $parts -Directory $tree
+          foreach ($item in $before) {
+            $copy = Get-Item -LiteralPath (Join-Path $tree $item.Name)
+            if ($copy.LastWriteTimeUtc.Ticks -ne $item.Ticks -or (Get-FileHash -Algorithm SHA256 $copy.FullName).Hash -cne $item.Hash) {
+              throw "Tree round trip changed $($item.Name)"
+            }
+          }
+          Write-Host 'Real Windows staged tree round trip succeeded.'
