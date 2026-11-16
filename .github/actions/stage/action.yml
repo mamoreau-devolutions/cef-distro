@@ -164,7 +164,7 @@ runs:
           echo "::error::Saved tree was built on a different host architecture; start a fresh build."
           exit 1
         fi
-        python scripts/cef.py unpack --parts "$CEF_PARTS/in" --directory "$CEF_TREE"
+        pwsh -NoProfile -File scripts/tree.ps1 -Mode unpack -Parts "$CEF_PARTS/in" -Directory "$CEF_TREE"
 
     - name: Build until deadline
       id: build
@@ -202,7 +202,7 @@ runs:
       run: |
         set -euo pipefail
         df -h "$CEF_TREE" || true
-        python scripts/cef.py pack --directory "$CEF_TREE" --output "$CEF_PARTS/out"
+        pwsh -NoProfile -File scripts/tree.ps1 -Mode pack -Directory "$CEF_TREE" -Output "$CEF_PARTS/out"
         uname -m > "$CEF_PARTS/out/host-arch.txt"
         ls -la "$CEF_PARTS/out"
 

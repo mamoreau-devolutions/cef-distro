@@ -51,32 +51,6 @@ try {
         (Get-Item -LiteralPath (Join-Path $restored 'empty')).Length -ne 0) { throw 'Empty file was not restored' }
     $deepCopy = Join-Path $restored ([IO.Path]::GetRelativePath($source, (Join-Path $deep 'file.txt')))
     if ([IO.File]::ReadAllText($deepCopy) -cne 'deep') { throw 'Deep path was not restored' }
-    $legacy = Join-Path $repo 'scripts' 'cef.py'
-    $parts = Join-Path $temp 'legacy-parts'
-    & python $legacy pack --directory $source --output $parts --part-size 1024
-    if ($LASTEXITCODE -ne 0) { throw 'Legacy tree packing failed' }
-    $legacyRestored = Join-Path $temp 'legacy-restored'
-    & $tree -Mode unpack -Directory $legacyRestored -Parts $parts
-    $legacyCopy = Join-Path $legacyRestored 'out' 'input.o'
-    if ([IO.File]::GetLastWriteTimeUtc($legacyCopy).Ticks -ne [IO.File]::GetLastWriteTimeUtc($file).Ticks -or
-        [Convert]::ToHexString([IO.File]::ReadAllBytes($legacyCopy)) -cne [Convert]::ToHexString($bytes)) {
-        throw 'PowerShell did not restore the legacy tree'
-    }
-    if ($IsWindows -and
-        (-not (Get-Item -LiteralPath (Join-Path $legacyRestored 'junction') -Force).LinkTarget -or
-         [Convert]::ToHexString([IO.File]::ReadAllBytes((Join-Path $legacyRestored 'hard.o'))) -cne [Convert]::ToHexString($bytes))) {
-        throw 'PowerShell did not restore legacy junction or hard link'
-    }
-    $parts = Join-Path $temp 'reverse-parts'
-    & $tree -Mode pack -Directory $source -Output $parts -PartSize 1024
-    $reverse = Join-Path $temp 'legacy-reader'
-    & python $legacy unpack --directory $reverse --parts $parts
-    if ($LASTEXITCODE -ne 0) { throw 'Legacy tree unpacking failed' }
-    $reverseCopy = Join-Path $reverse 'out' 'input.o'
-    if ([IO.File]::GetLastWriteTimeUtc($reverseCopy).Ticks -ne [IO.File]::GetLastWriteTimeUtc($file).Ticks -or
-        [Convert]::ToHexString([IO.File]::ReadAllBytes($reverseCopy)) -cne [Convert]::ToHexString($bytes)) {
-        throw 'Legacy reader did not restore the PowerShell tree'
-    }
     Write-Host 'PowerShell compressed tree round-trip checks passed.'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force

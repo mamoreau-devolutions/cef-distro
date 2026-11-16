@@ -16,7 +16,6 @@ jobs:
         run: |
           pwsh -File scripts/stages.ps1 -Check
           pwsh -File tests/test_publish.ps1
-          python3 -m unittest discover -s tests -v
       - name: Hosted runner capacity
         run: |
           df -h .

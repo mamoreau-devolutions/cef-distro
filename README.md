@@ -68,8 +68,9 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    the sysroot build has no GTK for `cefclient`) until its deadline, then stops it
    gracefully so its log stays consistent.
 3. **Unfinished** stages save the whole tree as split tar+zstd artifacts that
-   preserve nanosecond mtimes (Python `tarfile` on Windows, where the system
-   bsdtar crashes on Chromium trees); the next stage restores them at the same
+   preserve nanosecond mtimes (`scripts/tree.ps1`; on Windows it streams with
+   .NET `TarWriter`/`TarReader` because the system bsdtar crashes on Chromium
+   trees); the next stage restores them at the same
    absolute path and ninja resumes.
 4. **The finishing** stage runs `make_distrib.py --minimal`, then
    `scripts/release.ps1` checks the standard archive name and top-level
