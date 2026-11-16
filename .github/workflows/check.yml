@@ -34,6 +34,7 @@ jobs:
         run: |
           ./tests/test_distrib.ps1
           ./tests/test_release.ps1
+          ./tests/test_sync.ps1
   exporter-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20

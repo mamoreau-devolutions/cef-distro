@@ -2,18 +2,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'candidate.ps1')
 Assert-PatchIdentity
 
-$compatibilityUrl = "https://raw.githubusercontent.com/chromiumembedded/cef/$($CefPins.cef_commit)/CHROMIUM_BUILD_COMPATIBILITY.txt"
-$compatibility = (Invoke-WebRequest -Uri $compatibilityUrl -TimeoutSec 60).Content
-foreach ($item in @(
-    @('chromium_checkout', "refs/tags/$($CefPins.chromium_tag)"),
-    @('depot_tools_checkout', $CefPins.depot_tools_commit)
-)) {
-    $pattern = "(?m)^\s*'$($item[0])':\s*'([^']+)'\s*,?\s*$"
-    $values = [regex]::Matches($compatibility, $pattern)
-    if ($values.Count -ne 1 -or $values[0].Groups[1].Value -cne $item[1]) {
-        throw "CEF compatibility mismatch: $($item[0])"
-    }
-}
+Assert-CefCompatibility
 
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("cef-patch-check-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $temp | Out-Null

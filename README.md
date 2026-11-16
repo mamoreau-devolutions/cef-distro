@@ -27,7 +27,7 @@ IronRDP revisions, plus the Git blob of CEF's `automate-git.py`:
 The five unchanged patches come from
 [IronRDP `ironrdp-browser` server/cef/patches at 692c34cf](https://github.com/Devolutions/IronRDP/tree/692c34cf429a704f7bc5d99188b5be6b961043d7/server/cef/patches).
 IronRDP is licensed under MIT or Apache-2.0; both license texts are included.
-`scripts/cef.py` verifies their Git blob identities; update those deliberately
+`scripts/candidate.ps1` verifies their Git blob identities; update those deliberately
 when changing patches.
 
 | Order | Tree | Patch |
@@ -88,7 +88,7 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
 Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
 `windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and
 `macos-26` Apple Silicon for both macOS architectures (Xcode 26). The build is an official configuration
-without ThinLTO, PGO, CFI or symbols (`GN_COMMON` in `scripts/cef.py`), which
+without ThinLTO, PGO, CFI or symbols (`scripts/build-env.ps1`), which
 keeps links within hosted memory; no codec or branding flags are set. A full
 six-target build can take multiple days depending on runner performance. Tree
 artifacts (~13 GB per stage) are kept for 7 days and candidates for 14 days.
@@ -100,7 +100,7 @@ disk (see CEF's
 [automated build setup](https://github.com/chromiumembedded/cef/blob/8ea0c73b5dbed1389c8dafb911a98c41246bb8cb/docs/automated_build_setup.md)):
 
 ```sh
-python3 scripts/cef.py sync --directory /new/owned/dir --target linux-x64
+pwsh scripts/sync.ps1 -Directory /new/owned/dir -Target linux-x64
 python3 scripts/cef.py build --directory /new/owned/dir --target linux-x64
 pwsh scripts/distrib.ps1 -Directory /new/owned/dir -Target linux-x64
 ```

@@ -137,8 +137,10 @@ runs:
 
     - name: Sync, patch, and generate build files
       if: steps.source.outputs.name == ''
-      shell: bash
-      run: python scripts/cef.py sync --directory "$CEF_TREE" --target "${{ inputs.target }}"
+      shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
+      run: ./scripts/sync.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
 
     - name: Download previous tree
       if: steps.source.outputs.name != ''

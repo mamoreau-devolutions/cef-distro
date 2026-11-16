@@ -16,6 +16,21 @@ function Assert-PatchIdentity {
     }
 }
 
+function Assert-CefCompatibility {
+    $url = "https://raw.githubusercontent.com/chromiumembedded/cef/$($CefPins.cef_commit)/CHROMIUM_BUILD_COMPATIBILITY.txt"
+    $compatibility = (Invoke-WebRequest -Uri $url -TimeoutSec 60).Content
+    foreach ($item in @(
+        @('chromium_checkout', "refs/tags/$($CefPins.chromium_tag)"),
+        @('depot_tools_checkout', $CefPins.depot_tools_commit)
+    )) {
+        $pattern = "(?m)^\s*'$($item[0])':\s*'([^']+)'\s*,?\s*$"
+        $values = [regex]::Matches($compatibility, $pattern)
+        if ($values.Count -ne 1 -or $values[0].Groups[1].Value -cne $item[1]) {
+            throw "CEF compatibility mismatch: $($item[0])"
+        }
+    }
+}
+
 function Test-FlatMapEqual($Actual, $Expected) {
     if ($null -eq $Actual -or $Actual.Count -ne $Expected.Count) { return $false }
     foreach ($key in $Expected.Keys) {
