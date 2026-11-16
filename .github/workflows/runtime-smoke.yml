@@ -32,10 +32,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-          architecture: ${{ endsWith(matrix.target, 'arm64') && 'arm64' || 'x64' }}
       - name: Download candidate
         shell: bash
         env:
@@ -69,58 +65,13 @@ jobs:
           "archive=$($candidate.Archive)" >> $env:GITHUB_OUTPUT
           "sha256=$($candidate.Manifest.sha256)" >> $env:GITHUB_OUTPUT
       - name: Load patched library and check disabled clipboard state
-        shell: bash
+        shell: pwsh
         env:
           TARGET: ${{ matrix.target }}
           CEF_ARCHIVE: ${{ steps.candidate.outputs.archive }}
           CEF_SHA256: ${{ steps.candidate.outputs.sha256 }}
         run: |
-          python - "$TARGET" <<'PY'
-          import os
-          import platform
-          from pathlib import Path
-          import subprocess
-          import sys
-          import tarfile
-          import tempfile
-
-          target = sys.argv[1]
-          system, architecture = target.split("-")
-          expected_system = {"linux": "Linux", "windows": "Windows", "macos": "Darwin"}[system]
-          expected_machine = {"x64": {"x86_64", "amd64"}, "arm64": {"arm64", "aarch64"}}[architecture]
-          if platform.system() != expected_system or platform.machine().lower() not in expected_machine:
-              raise RuntimeError(f"Native runner required for {target}, got {platform.system()} {platform.machine()}")
-          archive = Path(os.environ["CEF_ARCHIVE"])
-          with tempfile.TemporaryDirectory(prefix="cef-native-smoke-") as directory:
-              with tarfile.open(archive, "r:bz2") as tar:
-                  tar.extractall(directory, filter="data")
-              release = Path(directory) / archive.name.removesuffix(".tar.bz2") / "Release"
-              library = {
-                  "linux": release / "libcef.so",
-                  "windows": release / "libcef.dll",
-                  "macos": release / "Chromium Embedded Framework.framework" / "Chromium Embedded Framework",
-              }[system]
-              env = dict(os.environ)
-              if system == "linux":
-                  env["LD_LIBRARY_PATH"] = str(release) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
-              probe = """
-          import ctypes, os, sys
-          if os.name == "nt":
-              os.add_dll_directory(sys.argv[2])
-          lib = ctypes.CDLL(sys.argv[1])
-          lib.cef_isolated_clipboard_enabled.restype = ctypes.c_int
-          lib.cef_isolated_clipboard_generation.restype = ctypes.c_int64
-          enabled = lib.cef_isolated_clipboard_enabled()
-          generation = lib.cef_isolated_clipboard_generation()
-          if enabled != 0 or generation != -2:
-              raise RuntimeError(f"Unexpected clipboard state: enabled={enabled}, generation={generation}")
-          print(f"Native patched library loaded: clipboard enabled={enabled}, generation={generation}")
-          """
-              subprocess.run([sys.executable, "-c", probe, str(library), str(release)], env=env, check=True)
-          (Path(os.environ["RUNNER_TEMP"]) / "archive.sha256").write_bytes(
-          (os.environ["CEF_SHA256"] + "\n").encode("ascii")
-          )
-          PY
+          ./scripts/native-smoke.ps1 -Target $env:TARGET -Archive $env:CEF_ARCHIVE -Checksum $env:CEF_SHA256
       - name: Record tested archive checksum
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
