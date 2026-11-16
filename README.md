@@ -72,7 +72,7 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    bsdtar crashes on Chromium trees); the next stage restores them at the same
    absolute path and ninja resumes.
 4. **The finishing** stage runs `make_distrib.py --minimal`, then
-   `scripts/release.py` checks the standard archive name and top-level
+   `scripts/release.ps1` checks the standard archive name and top-level
    directory, and verifies the 14 patched exports in `libcef`. The candidate
    archive, `SHA256SUMS` and `manifest.json` are uploaded.
 5. The **release** workflow (`release.yml`) first checks that each patched

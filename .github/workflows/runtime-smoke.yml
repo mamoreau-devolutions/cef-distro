@@ -64,6 +64,25 @@ jobs:
           $candidate = Get-VerifiedCandidate 'candidate' $env:TARGET
           "archive=$($candidate.Archive)" >> $env:GITHUB_OUTPUT
           "sha256=$($candidate.Manifest.sha256)" >> $env:GITHUB_OUTPUT
+      - name: Exercise candidate preparation on the real archive
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          CEF_ARCHIVE: ${{ steps.candidate.outputs.archive }}
+          CEF_SHA256: ${{ steps.candidate.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $platform, $arch = $env:TARGET.Split('-')
+          $build = Join-Path $env:RUNNER_TEMP 'prepare-build'
+          $directory = Join-Path $build 'chromium' 'src' 'cef' 'binary_distrib'
+          New-Item -ItemType Directory -Force $directory | Out-Null
+          $path = (Resolve-Path $env:CEF_ARCHIVE).ProviderPath
+          New-Item -ItemType HardLink -Path (Join-Path $directory ([IO.Path]::GetFileName($path))) -Target $path | Out-Null
+          $out = Join-Path $env:RUNNER_TEMP 'prepare-output'
+          ./scripts/release.ps1 -Build $build -Output $out -Platform $platform -Arch $arch -Revision $env:GITHUB_SHA
+          $manifest = Get-Content -Raw (Join-Path $out 'manifest.json') | ConvertFrom-Json
+          if ($manifest.sha256 -cne $env:CEF_SHA256) { throw 'Prepared archive checksum changed' }
+          Remove-Item -LiteralPath $out -Recurse -Force
       - name: Load patched library and check disabled clipboard state
         shell: pwsh
         env:

@@ -31,7 +31,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Check distribution invocation
         shell: pwsh
-        run: ./tests/test_distrib.ps1
+        run: |
+          ./tests/test_distrib.ps1
+          ./tests/test_release.ps1
   exporter-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20

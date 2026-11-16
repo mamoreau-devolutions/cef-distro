@@ -179,9 +179,8 @@ runs:
         & ./scripts/distrib.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
         $platform, $arch = $env:TARGET.Split('-')
         $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
-        & python scripts/release.py --build $env:CEF_TREE --output $candidate `
-          --platform $platform --arch $arch --revision $env:GITHUB_SHA
-        if ($LASTEXITCODE -ne 0) { throw "Candidate verification failed with exit code $LASTEXITCODE" }
+        & ./scripts/release.ps1 -Build $env:CEF_TREE -Output $candidate `
+          -Platform $platform -Arch $arch -Revision $env:GITHUB_SHA
 
     - name: Upload candidate
       if: steps.build.outputs.complete == 'true'
