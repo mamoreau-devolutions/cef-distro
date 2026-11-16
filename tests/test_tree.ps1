@@ -22,6 +22,12 @@ try {
     }
     $stamp = [DateTime]::new(638355968001234567, [DateTimeKind]::Utc)
     [IO.File]::SetLastWriteTimeUtc($file, $stamp)
+    if ($IsLinux) {
+        & touch -d '@1700000000.123456789' $file
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot set nanosecond test timestamp' }
+        $nanoseconds = & stat -c '%y' $file
+        if ($LASTEXITCODE -ne 0 -or $nanoseconds -notlike '*.123456789 *') { throw 'Nanosecond test timestamp was not set' }
+    }
     $link = Join-Path $source 'link.o'
     $hasLink = $false
     try {
@@ -40,6 +46,7 @@ try {
     if ($hasLink -and -not (Get-Item -LiteralPath (Join-Path $restored 'link.o') -Force).LinkTarget) {
         throw 'File link was not restored'
     }
+    if ($IsLinux -and (& stat -c '%y' $copy) -cne $nanoseconds) { throw 'Nanosecond timestamp changed' }
     if (-not (Test-Path -LiteralPath (Join-Path $restored 'empty')) -or
         (Get-Item -LiteralPath (Join-Path $restored 'empty')).Length -ne 0) { throw 'Empty file was not restored' }
     $deepCopy = Join-Path $restored ([IO.Path]::GetRelativePath($source, (Join-Path $deep 'file.txt')))
