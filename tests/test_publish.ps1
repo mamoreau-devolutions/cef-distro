@@ -32,6 +32,16 @@ try {
     $second = Join-Path $root 'run2'
     $archive = New-TestCandidate $first 'linux-x64'
     $other = New-TestCandidate $second 'windows-x64'
+    Assert-Fails {
+        Get-VerifiedCandidate (Join-Path $second 'candidate-windows-x64') 'linux-x64'
+    } 'manifest is not for'
+    $expectedBlob = $CefPatchBlobs['isolated-clipboard.patch']
+    try {
+        $CefPatchBlobs['isolated-clipboard.patch'] = '0' * 40
+        Assert-Fails { Assert-PatchIdentity } 'Patch differs from recorded blob'
+    } finally {
+        $CefPatchBlobs['isolated-clipboard.patch'] = $expectedBlob
+    }
     $proofs = Join-Path $root 'proofs'
     foreach ($pair in @(@('linux-x64', $archive), @('windows-x64', $other))) {
         $directory = Join-Path $proofs "native-smoke-$($pair[0])"
