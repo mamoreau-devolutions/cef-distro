@@ -19,7 +19,8 @@ function Assert-PatchIdentity {
 function Test-FlatMapEqual($Actual, $Expected) {
     if ($null -eq $Actual -or $Actual.Count -ne $Expected.Count) { return $false }
     foreach ($key in $Expected.Keys) {
-        if ($Actual.Keys -cnotcontains $key -or $Actual[$key] -cne $Expected[$key]) { return $false }
+        if ($Actual.Keys -cnotcontains $key -or $Actual[$key] -isnot [string] -or
+            $Actual[$key] -cne $Expected[$key]) { return $false }
     }
     return $true
 }

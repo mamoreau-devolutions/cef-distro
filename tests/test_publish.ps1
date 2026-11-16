@@ -64,6 +64,12 @@ try {
     Assert-Fails {
         & $publish -Source @($second) -Targets '["windows-x64"]' -Output (Join-Path $root 'bad-pins')
     } 'different pins or patches'
+    $manifest.pins.cef_commit = $CefPins.cef_commit
+    $manifest.pins.cef_branch = 8078
+    $manifest | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $manifestPath
+    Assert-Fails {
+        & $publish -Source @($second) -Targets '["windows-x64"]' -Output (Join-Path $root 'bad-pin-type')
+    } 'different pins or patches'
     Write-Host 'PowerShell candidate assembly checks passed.'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force
