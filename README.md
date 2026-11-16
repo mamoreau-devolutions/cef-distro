@@ -75,9 +75,10 @@ into `build-target.yml` (regenerate with `python scripts/stages.py`):
    archive, `SHA256SUMS` and `manifest.json` are uploaded.
 5. The **release** workflow (`release.yml`) first checks that each patched
    library loads on a native runner. It checks every candidate's checksum and
-   that its manifest carries this checkout's pins and patch blobs, imports each
-   archive with the pinned cef-rs exporter, and checks the resulting library's
-   architecture and essential files. It then publishes a prerelease tagged
+   that its manifest carries this checkout's pins and patch blobs and matches
+   the archive actually smoke-tested, imports each archive with the pinned
+   cef-rs exporter, and checks the resulting library's architecture and
+   essential files. It then publishes a prerelease tagged
    `cef-<cef version>-patched.<run id>`. Dispatch **Publish release** directly
    with a JSON list of run IDs to assemble targets built by different runs
    (earlier runs win). Set `dry-run` to verify without publishing.

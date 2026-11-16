@@ -57,6 +57,22 @@ class PublishTests(unittest.TestCase):
                     publish.assemble([root], ["linux-x64"], root / "out")
             self.assertFalse((root / "out").exists())
 
+    def test_requires_native_smoke_for_the_exact_candidate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = candidate(root / "run", "linux-x64")
+            proofs = root / "proofs"
+            proof = proofs / "native-smoke-linux-x64" / "archive.sha256"
+            with self.assertRaises(FileNotFoundError):
+                publish.assemble([root / "run"], ["linux-x64"], root / "missing", proofs)
+            proof.parent.mkdir(parents=True)
+            proof.write_text("0" * 64 + "\n")
+            with self.assertRaisesRegex(ValueError, "different archive"):
+                publish.assemble([root / "run"], ["linux-x64"], root / "mismatch", proofs)
+            proof.write_text(sha256(archive) + "\n")
+            publish.assemble([root / "run"], ["linux-x64"], root / "out", proofs)
+            self.assertEqual((root / "out" / archive.name).read_bytes(), archive.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

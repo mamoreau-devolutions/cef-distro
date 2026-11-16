@@ -81,7 +81,7 @@ jobs:
           if platform.system() != expected_system or platform.machine().lower() not in expected_machine:
               raise RuntimeError(f"Native runner required for {target}, got {platform.system()} {platform.machine()}")
           cef.verify_patch_identity()
-          _, archive = publish.verify(Path("candidate"), target)
+          manifest, archive = publish.verify(Path("candidate"), target)
           with tempfile.TemporaryDirectory(prefix="cef-native-smoke-") as directory:
               with tarfile.open(archive, "r:bz2") as tar:
                   tar.extractall(directory, filter="data")
@@ -108,4 +108,14 @@ jobs:
           print(f"Native patched library loaded: clipboard enabled={enabled}, generation={generation}")
           """
               subprocess.run([sys.executable, "-c", probe, str(library), str(release)], env=env, check=True)
+          (Path(os.environ["RUNNER_TEMP"]) / "archive.sha256").write_bytes(
+          (manifest["sha256"] + "\n").encode("ascii")
+          )
           PY
+      - name: Record tested archive checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/archive.sha256
+          if-no-files-found: error
+          retention-days: 7

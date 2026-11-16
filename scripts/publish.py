@@ -35,13 +35,17 @@ def verify(candidate, target):
     return manifest, archive
 
 
-def assemble(sources, targets, output):
+def assemble(sources, targets, output, smoke_proofs=None):
     cef.verify_patch_identity()
     output.mkdir(parents=True)
     sums = []
     for target in targets:
         candidate = find(sources, target)
         manifest, archive = verify(candidate, target)
+        if smoke_proofs is not None:
+            proof = smoke_proofs / f"native-smoke-{target}" / "archive.sha256"
+            if proof.read_text(encoding="ascii").strip() != manifest["sha256"]:
+                raise ValueError(f"{target}: native smoke tested a different archive")
         shutil.copyfile(archive, output / archive.name)
         shutil.copyfile(candidate / "manifest.json", output / f"manifest-{target}.json")
         sums.append(f"{manifest['sha256']}  {archive.name}\n")
@@ -54,9 +58,11 @@ def main():
     parser.add_argument("--source", type=Path, action="append", required=True,
                         help="Directory containing candidate-<target> folders; first match wins")
     parser.add_argument("--targets", required=True, help="JSON list of targets")
+    parser.add_argument("--smoke-proofs", type=Path,
+                        help="Directory containing per-target native smoke checksums")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    assemble(args.source, json.loads(args.targets), args.output)
+    assemble(args.source, json.loads(args.targets), args.output, args.smoke_proofs)
 
 
 if __name__ == "__main__":
