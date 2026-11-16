@@ -51,6 +51,9 @@ try {
         (Get-Item -LiteralPath (Join-Path $restored 'empty')).Length -ne 0) { throw 'Empty file was not restored' }
     $deepCopy = Join-Path $restored ([IO.Path]::GetRelativePath($source, (Join-Path $deep 'file.txt')))
     if ([IO.File]::ReadAllText($deepCopy) -cne 'deep') { throw 'Deep path was not restored' }
+    $whole = Join-Path $temp 'whole-parts'
+    & $tree -Mode pack -Directory $source -Output $whole
+    if (@(Get-ChildItem -LiteralPath $whole -File).Count -ne 1) { throw 'Default part size did not produce one part' }
     Write-Host 'PowerShell compressed tree round-trip checks passed.'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force

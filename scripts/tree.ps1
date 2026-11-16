@@ -48,7 +48,7 @@ if ($Mode -eq 'pack') {
                         $count++
                         $written = 0
                     }
-                    $take = [int][Math]::Min($length - $offset, $partSize - $written)
+                    $take = [int][Math]::Min([long]($length - $offset), [long]$partSize - $written)
                     $part.Write($buffer, $offset, $take)
                     $offset += $take
                     $written += $take
