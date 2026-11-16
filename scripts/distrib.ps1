@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Directory = [IO.Path]::GetFullPath($Directory)
+$Directory = (Resolve-Path -LiteralPath $Directory).ProviderPath
 $platform, $arch = $Target.Split('-')
 $hostPlatform = if ($IsWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'linux' }
 if ($platform -cne $hostPlatform) { throw "$Target must be built on $platform, not $hostPlatform" }

@@ -31,6 +31,16 @@ try {
             throw 'Linux ARM64 sysroot was not selected'
         }
     }
+    Push-Location (Split-Path $temp -Parent)
+    try {
+        & $distrib -Directory (Split-Path $temp -Leaf) -Target "$platform-x64"
+        $expectedOutput = "--output-dir=$(Join-Path $temp 'chromium' 'src' 'cef' 'binary_distrib')"
+        if ($global:CefTestCapturedArguments -cnotcontains $expectedOutput) {
+            throw 'Relative build directory was not resolved before invoking CEF'
+        }
+    } finally {
+        Pop-Location
+    }
     $global:CefTestPythonExit = 17
     try {
         & $distrib -Directory $temp -Target "$platform-x64"
