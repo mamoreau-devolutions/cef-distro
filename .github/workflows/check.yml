@@ -22,6 +22,7 @@ jobs:
           df -h .
           free -h
   distrib-smoke:
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -31,12 +32,19 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Check distribution invocation
         shell: pwsh
-        run: |
-          ./tests/test_distrib.ps1
-          ./tests/test_release.ps1
-          ./tests/test_sync.ps1
-          ./tests/test_build.ps1
-          ./tests/test_tree.ps1
+        run: ./tests/test_distrib.ps1
+      - name: Check candidate preparation
+        shell: pwsh
+        run: ./tests/test_release.ps1
+      - name: Check source synchronization
+        shell: pwsh
+        run: ./tests/test_sync.ps1
+      - name: Check Ninja interruption
+        shell: pwsh
+        run: ./tests/test_build.ps1
+      - name: Check staged tree round trip
+        shell: pwsh
+        run: ./tests/test_tree.ps1
       - name: Check Windows tree serialization
         if: runner.os == 'Windows'
         shell: pwsh
