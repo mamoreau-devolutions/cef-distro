@@ -102,7 +102,7 @@ disk (see CEF's
 ```sh
 python3 scripts/cef.py sync --directory /new/owned/dir --target linux-x64
 python3 scripts/cef.py build --directory /new/owned/dir --target linux-x64
-python3 scripts/cef.py distrib --directory /new/owned/dir --target linux-x64
+pwsh scripts/distrib.ps1 -Directory /new/owned/dir -Target linux-x64
 ```
 
 The directory must not already exist; it is never cleaned or reused.

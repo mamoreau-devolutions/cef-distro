@@ -171,14 +171,17 @@ runs:
 
     - name: Create minimal distribution and verify patched exports
       if: steps.build.outputs.complete == 'true'
-      shell: bash
+      shell: pwsh
       env:
         TARGET: ${{ inputs.target }}
       run: |
-        set -euo pipefail
-        python scripts/cef.py distrib --directory "$CEF_TREE" --target "$TARGET"
-        python scripts/release.py --build "$CEF_TREE" --output "$RUNNER_TEMP/candidate" \
-          --platform "${TARGET%-*}" --arch "${TARGET#*-}" --revision "$GITHUB_SHA"
+        $ErrorActionPreference = 'Stop'
+        & ./scripts/distrib.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
+        $platform, $arch = $env:TARGET.Split('-')
+        $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
+        & python scripts/release.py --build $env:CEF_TREE --output $candidate `
+          --platform $platform --arch $arch --revision $env:GITHUB_SHA
+        if ($LASTEXITCODE -ne 0) { throw "Candidate verification failed with exit code $LASTEXITCODE" }
 
     - name: Upload candidate
       if: steps.build.outputs.complete == 'true'
