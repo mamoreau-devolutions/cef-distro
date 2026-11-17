@@ -58,7 +58,7 @@ $lines.AddRange([string[]]@(
     '  verdict:',
     "    needs: [$needs]",
     '    if: ${{ always() }}',
-    '    runs-on: ubuntu-latest',
+    '    runs-on: ubuntu-24.04',
     '    steps:',
     '      - name: Require a finished build',
     '        env:',
