@@ -36,6 +36,12 @@ runs:
         BUDGET: ${{ inputs.budget-minutes }}
       run: |
         set -euo pipefail
+        # macOS runners have died after 5h36m-5h48m, an hour or more past a
+        # 280-minute deadline, while saving trees; keep that much margin there.
+        if [ "$RUNNER_OS" = macOS ] && [ "$BUDGET" -gt 220 ]; then
+          echo "Capping the macOS build budget at 220 of $BUDGET minutes"
+          BUDGET=220
+        fi
         echo "CEF_DEADLINE=$(( $(date +%s) + BUDGET * 60 ))" >> "$GITHUB_ENV"
         # Every stage must use the same absolute tree path so ninja state stays valid.
         case "$RUNNER_OS" in

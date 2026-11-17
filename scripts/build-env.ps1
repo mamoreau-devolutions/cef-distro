@@ -64,3 +64,16 @@ function Get-CefMemoryReport {
         return "memory report unavailable: $($_.Exception.Message)"
     }
 }
+
+function Get-CefDiskReport([string]$Directory) {
+    try {
+        if ($IsWindows) {
+            $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($Directory).Substring(0, 1))
+            return 'disk free {0:N1} of {1:N1} GiB' -f ($drive.Free / 1GB), (($drive.Free + $drive.Used) / 1GB)
+        }
+        $fields = (& df -Pk $Directory | Select-Object -Last 1) -split '\s+'
+        return 'disk free {0:N1} of {1:N1} GiB' -f ([long]$fields[3] * 1KB / 1GB), ([long]$fields[1] * 1KB / 1GB)
+    } catch {
+        return "disk report unavailable: $($_.Exception.Message)"
+    }
+}

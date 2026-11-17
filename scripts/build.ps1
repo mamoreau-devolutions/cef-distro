@@ -21,7 +21,7 @@ $memoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
 $processorCount = [Environment]::ProcessorCount
 $jobs = Get-CefNinjaJobs $memoryBytes $processorCount
 Write-Host ('Ninja jobs: {0} ({1} CPUs, {2:N1} GiB memory; {3})' -f
-    $jobs, $processorCount, ($memoryBytes / 1GB), (Get-CefMemoryReport))
+    $jobs, $processorCount, ($memoryBytes / 1GB), "$(Get-CefMemoryReport); $(Get-CefDiskReport $Directory)")
 $arguments = @('-C', "out/Release_GN_$arch", '-j', "$jobs") + $targets
 Write-Host "+ $ninja $($arguments -join ' ')"
 if ($IsWindows) {
@@ -100,7 +100,7 @@ try {
         $milliseconds = [int][Math]::Min(600000, $remaining * 1000)
         $exited = $process.WaitForExit($milliseconds)
         if ($exited -or $remaining -le 600) { break }
-        Write-Host "[$([DateTimeOffset]::UtcNow.ToString('u'))] $(Get-CefMemoryReport)"
+        Write-Host "[$([DateTimeOffset]::UtcNow.ToString('u'))] $(Get-CefMemoryReport); $(Get-CefDiskReport $Directory)"
     }
     if ($exited) {
         if ($process.ExitCode -ne 0) { throw "Ninja failed with exit code $($process.ExitCode)" }
