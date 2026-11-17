@@ -68,7 +68,10 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
 2. **Every stage** runs ninja (`cefclient` on macOS, `cefclient`, `bootstrap`
    and `bootstrapc` on Windows, `cefsimple` and `chrome_sandbox` on Linux, where
    the sysroot build has no GTK for `cefclient`) until its deadline, then stops it
-   gracefully so its log stays consistent.
+   gracefully so its log stays consistent. Ninja runs at most one job per 2 GiB
+   of memory, and never more than its default of CPUs + 2: 3 jobs on the
+   7 GB macOS runners, 6 on Linux and Windows (set `CEF_NINJA_JOBS` to override).
+   Memory and swap use are logged every 10 minutes while ninja runs.
 3. **Unfinished** stages save the whole tree as split tar+zstd artifacts that
    preserve nanosecond mtimes (`scripts/tree.ps1`; on Windows it streams with
    .NET `TarWriter`/`TarReader` because the system bsdtar crashes on Chromium

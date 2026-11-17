@@ -22,3 +22,45 @@ function Set-CefBuildEnvironment([string]$Directory, [string]$Target) {
     }
     $env:GN_DEFINES = $gn -join ' '
 }
+
+# Official Chromium compile jobs can each take about 2 GiB. Ninja's default of
+# CPUs + 2 jobs fits the 16 GB Linux and Windows runners but makes the 7 GB macOS
+# runner swap until it stops responding, so memory also limits the job count.
+$CefBytesPerNinjaJob = 2GB
+
+function Get-CefNinjaJobs([long]$MemoryBytes, [int]$ProcessorCount) {
+    if ($env:CEF_NINJA_JOBS) {
+        $jobs = 0
+        if (-not [int]::TryParse($env:CEF_NINJA_JOBS, [ref]$jobs) -or $jobs -lt 1) {
+            throw "CEF_NINJA_JOBS must be a positive integer: $env:CEF_NINJA_JOBS"
+        }
+        return $jobs
+    }
+    $byMemory = [Math]::Floor($MemoryBytes / $CefBytesPerNinjaJob)
+    return [int][Math]::Max(1, [Math]::Min($ProcessorCount + 2, $byMemory))
+}
+
+function Get-CefMemoryReport {
+    try {
+        if ($IsMacOS) {
+            $free = (& memory_pressure -Q 2>$null | Select-String 'free percentage') -replace '^.*:\s*', ''
+            $swap = (& sysctl -n vm.swapusage 2>$null) -join ' '
+            return "memory free $free; swap $swap"
+        }
+        if ($IsLinux) {
+            $info = @{}
+            foreach ($line in Get-Content -LiteralPath /proc/meminfo) {
+                if ($line -match '^(\w+):\s+(\d+) kB') { $info[$Matches[1]] = [long]$Matches[2] * 1KB }
+            }
+            $swapUsed = $info.SwapTotal - $info.SwapFree
+            return 'memory available {0:N1} of {1:N1} GiB; swap used {2:N1} of {3:N1} GiB' -f
+                ($info.MemAvailable / 1GB), ($info.MemTotal / 1GB), ($swapUsed / 1GB), ($info.SwapTotal / 1GB)
+        }
+        $os = Get-CimInstance Win32_OperatingSystem
+        return 'memory free {0:N1} of {1:N1} GiB; commit free {2:N1} of {3:N1} GiB' -f
+            ($os.FreePhysicalMemory * 1KB / 1GB), ($os.TotalVisibleMemorySize * 1KB / 1GB),
+            ($os.FreeVirtualMemory * 1KB / 1GB), ($os.TotalVirtualMemorySize * 1KB / 1GB)
+    } catch {
+        return "memory report unavailable: $($_.Exception.Message)"
+    }
+}

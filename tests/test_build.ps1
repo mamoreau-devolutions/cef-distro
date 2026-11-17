@@ -1,6 +1,37 @@
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $buildScript = Join-Path $repo 'scripts' 'build.ps1'
+. (Join-Path $repo 'scripts' 'build-env.ps1')
+$previousJobs = $env:CEF_NINJA_JOBS
+try {
+    $env:CEF_NINJA_JOBS = $null
+    foreach ($case in @(
+        @{ Memory = 7GB; Cpus = 3; Expected = 3 },   # standard macOS arm64 runner
+        @{ Memory = 16GB; Cpus = 4; Expected = 6 },  # standard Linux and Windows runners
+        @{ Memory = 14GB; Cpus = 5; Expected = 7 },
+        @{ Memory = 1GB; Cpus = 8; Expected = 1 }
+    )) {
+        $actual = Get-CefNinjaJobs $case.Memory $case.Cpus
+        if ($actual -ne $case.Expected) {
+            throw "Ninja jobs for $($case.Memory / 1GB) GiB and $($case.Cpus) CPUs: expected $($case.Expected), got $actual"
+        }
+    }
+    $env:CEF_NINJA_JOBS = '9'
+    if ((Get-CefNinjaJobs 7GB 3) -ne 9) { throw 'CEF_NINJA_JOBS override was ignored' }
+    foreach ($invalid in @('0', '-1', 'many')) {
+        $env:CEF_NINJA_JOBS = $invalid
+        $rejected = $false
+        try { Get-CefNinjaJobs 7GB 3 | Out-Null } catch {
+            if ($_.Exception.Message -notlike '*must be a positive integer*') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw "Accepted CEF_NINJA_JOBS=$invalid" }
+    }
+} finally {
+    $env:CEF_NINJA_JOBS = $previousJobs
+}
+$memoryReport = Get-CefMemoryReport
+if ($memoryReport -like 'memory report unavailable*') { throw "Memory report failed: $memoryReport" }
 $ninjaCommand = Get-Command ninja -CommandType Application -ErrorAction Stop | Select-Object -First 1
 $ninjaSource = $ninjaCommand.Source
 if ($IsWindows -and $env:ChocolateyInstall) {
