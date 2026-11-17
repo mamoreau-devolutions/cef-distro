@@ -54,6 +54,8 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
   resumption).
 - `resume-run`: an earlier run ID; each target's stage 1 restores that run's
   newest saved tree instead of syncing (use after a runner loss or failure).
+  A finished build whose distribution step fails also saves its tree, so
+  resuming it retries only the distribution.
   Trees must have matching host-architecture metadata; older trees without it
   and Intel macOS trees cannot resume on Apple Silicon.
 

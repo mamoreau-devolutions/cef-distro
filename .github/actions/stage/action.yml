@@ -174,14 +174,16 @@ runs:
       run: ./scripts/build.ps1 -Directory $env:CEF_TREE -Target $env:TARGET -Deadline $env:CEF_DEADLINE
 
     - name: Create minimal distribution and verify patched exports
+      id: distrib
       if: steps.build.outputs.complete == 'true'
       shell: pwsh
       env:
         TARGET: ${{ inputs.target }}
       run: |
         $ErrorActionPreference = 'Stop'
-        & ./scripts/distrib.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
+        # distrib.ps1 runs in this process and removes TARGET from its environment.
         $platform, $arch = $env:TARGET.Split('-')
+        & ./scripts/distrib.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
         $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
         & ./scripts/release.ps1 -Build $env:CEF_TREE -Output $candidate `
           -Platform $platform -Arch $arch -Revision $env:GITHUB_SHA
@@ -196,8 +198,10 @@ runs:
         retention-days: 14
         compression-level: 0
 
+    # A finished build whose distribution fails keeps its tree, so a resume-run
+    # retries only the distribution instead of the last build stage.
     - name: Save tree for next stage
-      if: steps.build.outputs.complete == 'false'
+      if: steps.build.outputs.complete == 'false' || (failure() && steps.distrib.outcome == 'failure')
       shell: bash
       run: |
         set -euo pipefail
@@ -207,7 +211,7 @@ runs:
         ls -la "$CEF_PARTS/out"
 
     - name: Upload tree
-      if: steps.build.outputs.complete == 'false'
+      if: steps.build.outputs.complete == 'false' || (failure() && steps.distrib.outcome == 'failure')
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: tree-${{ inputs.target }}-${{ inputs.stage }}
