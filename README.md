@@ -79,7 +79,9 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    preserve nanosecond mtimes (`scripts/tree.ps1`; on Windows it streams with
    .NET `TarWriter`/`TarReader` because the system bsdtar crashes on Chromium
    trees); the next stage restores them at the same
-   absolute path and ninja resumes.
+   absolute path and ninja resumes. Saving records each part's SHA-256 in
+   `tree.sha256` and decodes the stored parts, packing once more if they are
+   corrupt; restoring checks those hashes before extracting anything.
 4. **The finishing** stage runs `make_distrib.py --minimal`, then
    `scripts/release.ps1` checks the standard archive name and top-level
    directory, and verifies the 14 patched exports in `libcef`. The candidate

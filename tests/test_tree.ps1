@@ -35,7 +35,29 @@ try {
         $hasLink = $true
     } catch { }
     & $tree -Mode pack -Directory $source -Output $parts -PartSize 1024
-    if (@(Get-ChildItem -LiteralPath $parts -File).Count -lt 2) { throw 'Tree was not split' }
+    if (@(Get-ChildItem -LiteralPath $parts -Filter 'tree.tar.zst.*' -File).Count -lt 2) { throw 'Tree was not split' }
+    if (-not (Test-Path -LiteralPath (Join-Path $parts 'tree.sha256'))) { throw 'Packed tree has no checksums' }
+
+    # A part that changes after packing must fail before extraction starts.
+    $corrupt = Join-Path $temp 'corrupt-parts'
+    Copy-Item -LiteralPath $parts -Destination $corrupt -Recurse
+    $victim = Join-Path $corrupt 'tree.tar.zst.0001'
+    $data = [IO.File]::ReadAllBytes($victim)
+    $data[0] = $data[0] -bxor 0xff
+    [IO.File]::WriteAllBytes($victim, $data)
+    $rejected = $false
+    try { & $tree -Mode unpack -Directory (Join-Path $temp 'corrupt-restored') -Parts $corrupt }
+    catch { $rejected = "$_" -like 'Downloaded tree parts are corrupt: tree.tar.zst.0001 *' }
+    if (-not $rejected -or (Test-Path -LiteralPath (Join-Path $temp 'corrupt-restored'))) { throw 'Corrupt part was not rejected' }
+
+    # Trees saved before checksums existed still restore.
+    $legacy = Join-Path $temp 'legacy-parts'
+    Copy-Item -LiteralPath $parts -Destination $legacy -Recurse
+    Remove-Item -LiteralPath (Join-Path $legacy 'tree.sha256')
+    & $tree -Mode unpack -Directory (Join-Path $temp 'legacy-restored') -Parts $legacy
+    $legacyCopy = [IO.File]::ReadAllBytes((Join-Path $temp 'legacy-restored' 'out' 'input.o'))
+    if ([Convert]::ToHexString($legacyCopy) -cne [Convert]::ToHexString($bytes)) { throw 'Legacy tree did not restore' }
+
     & $tree -Mode unpack -Directory $restored -Parts $parts
     $copy = Join-Path $restored 'out' 'input.o'
     if ([Convert]::ToHexString([IO.File]::ReadAllBytes($copy)) -cne [Convert]::ToHexString($bytes) -or
@@ -53,7 +75,7 @@ try {
     if ([IO.File]::ReadAllText($deepCopy) -cne 'deep') { throw 'Deep path was not restored' }
     $whole = Join-Path $temp 'whole-parts'
     & $tree -Mode pack -Directory $source -Output $whole
-    if (@(Get-ChildItem -LiteralPath $whole -File).Count -ne 1) { throw 'Default part size did not produce one part' }
+    if (@(Get-ChildItem -LiteralPath $whole -Filter 'tree.tar.zst.*' -File).Count -ne 1) { throw 'Default part size did not produce one part' }
     Write-Host 'PowerShell compressed tree round-trip checks passed.'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force
