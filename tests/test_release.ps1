@@ -44,7 +44,7 @@ try {
     $checksum = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
     if ($manifest.sha256 -cne $checksum -or $manifest.repository_commit -cne ('a' * 40) -or
         -not (Test-FlatMapEqual $manifest.patch_git_blobs $CefPatchBlobs) -or
-        (Get-Content -Raw (Join-Path $output 'SHA256SUMS')).Trim() -cne "$checksum  $name" -or
+        [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $output 'SHA256SUMS'))) -cne "$checksum  $name`n" -or
         (Get-FileHash -Algorithm SHA256 (Join-Path $output $name)).Hash.ToLowerInvariant() -cne $checksum) {
         throw 'Candidate archive, checksum or manifest differs from input'
     }

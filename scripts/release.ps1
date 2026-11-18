@@ -151,7 +151,7 @@ New-Item -ItemType Directory -Path $Output | Out-Null
 $target = Join-Path $Output $name
 Copy-Item -LiteralPath $archive -Destination $target
 $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
-[IO.File]::WriteAllText((Join-Path (Resolve-Path $Output).ProviderPath 'SHA256SUMS'), "$checksum  $name`n", [Text.Encoding]::UTF8)
+[IO.File]::WriteAllText((Join-Path (Resolve-Path $Output).ProviderPath 'SHA256SUMS'), "$checksum  $name`n", [Text.UTF8Encoding]::new($false))
 $patchHashes = [ordered]@{}
 foreach ($patch in $CefPatchBlobs.Keys) {
     $patchHashes[$patch] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $CefRoot 'patches' $patch)).Hash.ToLowerInvariant()
