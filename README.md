@@ -51,8 +51,9 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
   deferred, not removed; leave this unset to build macOS again.
 - `publish`: create one prerelease when every requested target succeeds.
 - `stage-minutes`: build time per stage (default 280; lower only to test
-  resumption). macOS stages build at most 220 minutes, because their runners
-  have been lost while saving trees late in the six-hour job limit.
+  resumption). macOS stages build at most 190 minutes, because hosted macOS
+  runners have started losing files and dropping off about four hours into a
+  job, well inside the six-hour job limit.
 - `resume-run`: an earlier run ID; each target's stage 1 restores that run's
   newest saved tree instead of syncing (use after a runner loss or failure).
   A finished build whose distribution step fails also saves its tree, so
