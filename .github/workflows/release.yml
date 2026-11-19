@@ -127,7 +127,9 @@ jobs:
             case "$target" in
               linux-*) test -f "$output/chrome-sandbox"; test -f "$output/icudtl.dat" ;;
               windows-*) test -f "$output/bootstrap.exe"; test -f "$output/bootstrapc.exe"; test -f "$output/icudtl.dat" ;;
-              macos-*) test -L "$output/Chromium Embedded Framework.framework/Versions/Current" ;;
+              # CEF's distribution ships a flat framework; -f also follows a versioned layout's links.
+              macos-*) test -f "$output/Chromium Embedded Framework.framework/Resources/Info.plist"
+                test -f "$output/Chromium Embedded Framework.framework/Resources/icudtl.dat" ;;
             esac
             sha1=$(sha1sum "$archive" | cut -d' ' -f1)
             jq -e --arg name "$(basename "$archive")" --arg sha1 "$sha1" \
