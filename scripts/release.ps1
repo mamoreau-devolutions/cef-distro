@@ -133,9 +133,10 @@ try {
         $nm = Join-Path $Build 'chromium' 'src' 'third_party' 'llvm-build' 'Release+Asserts' 'bin' 'llvm-nm'
         if (-not (Test-Path -LiteralPath $nm -PathType Leaf)) {
             $nm = 'nm'
-            $flags = if ($IsMacOS) { @('-gU') } else { @('-D', '--defined-only') }
+            # @() keeps a single flag an array; a bare string would splat one character at a time.
+            $flags = @(if ($IsMacOS) { '-gU' } else { '-D', '--defined-only' })
         } else {
-            $flags = if ($Platform -eq 'macos') { @('-g', '--defined-only') } else { @('-D', '--defined-only') }
+            $flags = @(if ($Platform -eq 'macos') { '-g', '--defined-only' } else { '-D', '--defined-only' })
         }
         $symbols = (& $nm @flags $binary) -join "`n"
         if ($LASTEXITCODE -ne 0) { throw "Cannot read library exports: $nm" }
