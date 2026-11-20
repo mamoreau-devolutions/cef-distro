@@ -24,6 +24,55 @@ function Invoke-UpstreamRequest([string]$Uri, [string]$OutFile) {
     }
 }
 
+# Patches apply in this order, each tree from its own pinned upstream revision.
+$CefPatchTrees = @(
+    @{
+        Name = 'cef'; Repository = 'chromiumembedded/cef'; RevisionPin = 'cef_commit'
+        Patches = @('isolated-clipboard.patch', 'remote-devices-cef.patch')
+    },
+    @{
+        Name = 'chromium'; Repository = 'chromium/chromium'; RevisionPin = 'chromium_commit'
+        Patches = @('remote-devices-chromium.patch', 'in-process-audio-shutdown.patch', 'disable-chromium-shutdown-signals.patch')
+    }
+)
+
+# Paths the patches touch; -Existing leaves out files the patches create.
+function Get-PatchedPaths([string[]]$Patches, [switch]$Existing) {
+    $paths = [System.Collections.Generic.SortedSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($name in $Patches) {
+        foreach ($line in Get-Content -Encoding utf8 -LiteralPath (Join-Path $CefRoot 'patches' $name)) {
+            if ($line -cmatch '^--- a/(.+)$' -or (-not $Existing -and $line -cmatch '^\+\+\+ b/(.+)$')) {
+                [void]$paths.Add($Matches[1])
+            }
+        }
+    }
+    return @($paths)
+}
+
+# Downloads upstream files at a revision into a directory, keeping their paths.
+function Save-UpstreamFiles($Tree, [string]$Revision, [string[]]$Paths, [string]$Directory) {
+    foreach ($path in $Paths) {
+        $destination = Join-Path $Directory $path
+        New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+        Invoke-UpstreamRequest "https://raw.githubusercontent.com/$($Tree.Repository)/$Revision/$path" $destination | Out-Null
+    }
+}
+
+# Rewrites the patch blob identities above to match patches/*.patch.
+function Update-PatchBlobs {
+    $path = Join-Path $CefRoot 'scripts' 'candidate.ps1'
+    $text = [IO.File]::ReadAllText($path)
+    foreach ($name in @($CefPatchBlobs.Keys)) {
+        $blob = (& git hash-object --no-filters -- (Join-Path $CefRoot 'patches' $name)).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "Cannot hash patch: $name" }
+        $pattern = "(?m)^(\s*'$([regex]::Escape($name))' = ')[0-9a-f]{40}(')"
+        if ($text -cnotmatch $pattern) { throw "No blob identity for $name in candidate.ps1" }
+        $text = [regex]::Replace($text, $pattern, "`${1}$blob`${2}")
+        $CefPatchBlobs[$name] = $blob
+    }
+    [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
+}
+
 function Assert-PatchIdentity {
     foreach ($name in $CefPatchBlobs.Keys) {
         $actual = & git hash-object --no-filters -- (Join-Path $CefRoot 'patches' $name)

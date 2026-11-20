@@ -30,7 +30,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
-    if: github.ref == 'refs/heads/master'
+    # auto/cef-* branches carry patches Fix patches rebased and Copilot approved.
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/auto/cef-')
     runs-on: ubuntu-24.04
     outputs:
       targets: ${{ steps.targets.outputs.targets }}

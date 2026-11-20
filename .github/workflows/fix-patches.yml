@@ -1,0 +1,162 @@
+name: Fix patches
+run-name: Fix patches for CEF ${{ inputs.version }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable CEF release on the pinned branch (for example 156.0.32) that the patches no longer apply to
+        type: string
+        required: true
+permissions:
+  contents: write
+  actions: write
+  issues: write
+concurrency:
+  group: fix-patches
+  cancel-in-progress: false
+jobs:
+  # Rebases the patches onto a new upstream release: three-way merges first,
+  # Copilot's cloud agent only for conflicts, then a Copilot code review that
+  # must approve before the branch is built and published. Only the patch files
+  # are taken from Copilot's branch.
+  fix:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      BRANCH: auto/cef-${{ inputs.version }}
+      COPILOT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Claim the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$COPILOT_TOKEN" || { echo '::error::The COPILOT_AGENT_TOKEN secret is not set'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # One attempt per release; delete the branch to try again.
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "::error::$BRANCH already exists"
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/$BRANCH"
+      - name: Pin the release and merge the patches into it
+        id: rebase
+        shell: pwsh
+        run: |
+          git show HEAD:pins.json | Set-Content "$env:RUNNER_TEMP/from-pins.json"
+          ./scripts/upstream.ps1 -Version $env:VERSION -Write | Out-Null
+          git diff --quiet -- pins.json
+          if ($LASTEXITCODE -eq 0) { throw "CEF $env:VERSION is already pinned" }
+          ./scripts/rebase-patches.ps1 -Start -FromPins "$env:RUNNER_TEMP/from-pins.json"
+          $code = $LASTEXITCODE
+          if ($code -notin 0, 2) { exit $code }
+          "conflict=$(($code -eq 2).ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          exit 0
+      - name: Push a rebase request for Copilot
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n --arg version "$VERSION" --slurpfile from "$RUNNER_TEMP/from-pins.json" \
+            '{version: $version, from_pins: $from[0]}' > rebase-request.json
+          git switch -q -c "$BRANCH-request"
+          git add pins.json rebase-request.json
+          git commit -q -m "Request a patch rebase onto CEF $VERSION"
+          git push -f origin "HEAD:refs/heads/$BRANCH-request"
+          git switch -q -
+          git restore --source "$BRANCH-request" -- pins.json
+      - name: Ask Copilot to resolve the conflicts
+        id: task
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: pwsh
+        env:
+          MODEL: ${{ vars.COPILOT_AGENT_MODEL }}
+        run: |
+          $prompt = @"
+          Rebase this repository's patches onto CEF $env:VERSION. Follow the section "Rebasing the patches onto a new upstream release" in AGENTS.md exactly.
+          The setup steps already ran ``pwsh scripts/rebase-patches.ps1 -Start``; run ``pwsh scripts/rebase-patches.ps1 -Continue`` to see the conflicts that remain (run -Start yourself only if .rebase/state.json is missing).
+          Resolve every conflict until -Continue reports that all patches are rebased, then commit only patches/*.patch and scripts/candidate.ps1 with a message that explains each resolution.
+          "@
+          ./scripts/copilot.ps1 -Action StartTask -Prompt $prompt -BaseRef "$env:BRANCH-request" -Model $env:MODEL
+      - name: Wait for Copilot
+        id: wait
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: pwsh
+        run: ./scripts/copilot.ps1 -Action WaitTask -TaskId '${{ steps.task.outputs.task_id }}' -TimeoutMinutes 200
+      - name: Take only the patch files from Copilot's branch
+        if: steps.rebase.outputs.conflict == 'true'
+        shell: bash
+        env:
+          COPILOT_BRANCH: ${{ steps.wait.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "refs/heads/$COPILOT_BRANCH"
+          git checkout FETCH_HEAD -- patches/
+          git log -1 --format='%B' FETCH_HEAD > "$RUNNER_TEMP/copilot-notes.md"
+      - name: Check the rebased patches
+        shell: pwsh
+        run: |
+          . ./scripts/candidate.ps1
+          Update-PatchBlobs
+          ./scripts/check-patches.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/compare-patches.ps1 -BaseRef origin/master -Summary "$env:RUNNER_TEMP/summary.md"
+      - name: Open a pull request
+        id: pr
+        shell: bash
+        env:
+          TASK_URL: ${{ steps.task.outputs.task_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git add pins.json patches scripts/candidate.ps1
+          git commit -q -m "chore(patches): rebase onto CEF $VERSION" \
+            -m "The patches no longer applied to CEF $VERSION; this carries them onto it. Built by $RUN_URL."
+          git push -f origin "HEAD:refs/heads/$BRANCH"
+          {
+            echo "Moves the pins to CEF \`$VERSION\` and rebases the patches onto it ($RUN_URL)."
+            echo
+            cat "$RUNNER_TEMP/summary.md"
+            if [ -n "$TASK_URL" ]; then
+              echo
+              echo "Conflicts were resolved by Copilot's cloud agent ($TASK_URL):"
+              echo
+              sed 's/^/> /' "$RUNNER_TEMP/copilot-notes.md"
+            fi
+            echo
+            echo "When Copilot's review approves, the branch is built and checked like any release (patch blobs, native smoke tests, IronRDP e2e) and published, which fast-forwards master to it."
+          } > body.md
+          echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          url=$(GH_TOKEN="$COPILOT_TOKEN" gh pr create --base master --head "$BRANCH" \
+            --title "Rebase the patches onto CEF $VERSION" --body-file body.md)
+          echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
+          echo "Opened $url"
+      - name: Ask Copilot to review
+        shell: pwsh
+        run: |
+          ./scripts/copilot.ps1 -Action RequestReview -PullRequest ${{ steps.pr.outputs.number }}
+          ./scripts/copilot.ps1 -Action WaitReview -PullRequest ${{ steps.pr.outputs.number }} `
+            -Since '${{ steps.pr.outputs.since }}' -TimeoutMinutes 60
+      - name: Build and publish the reviewed branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run build.yml --ref "$BRANCH"
+          echo "Started a published build of $BRANCH"
+      - name: Report a failed fix
+        if: failure()
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "The automatic patch rebase onto CEF \`$VERSION\` failed: $RUN_URL" '' \
+            "Nothing was pinned or published. Fix the patches by hand, or delete the \`$BRANCH\` branch and dispatch **Fix patches** again." > body.md
+          ./scripts/issue.sh "Automatic patch fix failed for CEF $VERSION" body.md

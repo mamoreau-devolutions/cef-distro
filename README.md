@@ -26,7 +26,8 @@ source of truth, and the update workflow advances it along the CEF branch:
 - `ironrdp_commit`: the IronRDP revision the patches come from.
 
 The five unchanged patches come from
-[IronRDP `ironrdp-browser` server/cef/patches at 64168d20](https://github.com/Devolutions/IronRDP/tree/64168d204f4369b6657b233bf7e6121c5acc0271/server/cef/patches).
+[IronRDP `ironrdp-browser` server/cef/patches at c18e1225](https://github.com/Devolutions/IronRDP/tree/c18e1225442259ca075953636fd763a2a0fc60bd/server/cef/patches),
+whose browser e2e suites also gate every release (see below).
 IronRDP is licensed under MIT or Apache-2.0; both license texts are included.
 `scripts/candidate.ps1` verifies their Git blob identities; update those deliberately
 when changing patches.
@@ -177,10 +178,63 @@ commits the new pins to `master` and dispatches a published build, so a clean
 upstream release turns into a release here without intervention. Scheduled runs
 only do this when the repository variable `CEF_AUTO_UPDATE` is `true`;
 otherwise, and when dispatched without `apply`, they only report. When the
-patches no longer apply, it keeps one open issue with the failure and pins
-nothing. When a newer milestone is stable for every target, it keeps one open
-issue for that decision; moving to a milestone changes the branch, depot_tools
-and cef-rs, and needs coordinated consumer changes.
+patches no longer apply, it starts **Fix patches** for that release (below),
+once per release. When a newer milestone is stable for every target, it keeps
+one open issue for that decision; moving to a milestone changes the branch,
+depot_tools and cef-rs, and needs coordinated consumer changes.
 
 To pin a specific release on the branch by hand, run
 `./scripts/upstream.ps1 -Version <cef version> -Write`.
+
+### Rebasing patches without a person
+
+**Fix patches** (`fix-patches.yml`) carries the patches onto a release they no
+longer apply to, and publishes it only after automated checks and an automated
+review:
+
+1. It claims the release by pushing `auto/cef-<version>`; a branch that already
+   exists means the release was attempted, so delete it to try again.
+2. `scripts/rebase-patches.ps1` applies each patch in order to the new upstream
+   files, and three-way merges it (`git merge-file`, with the old upstream file
+   as base) when it no longer applies as is. Most upstream drift merges here.
+3. Only when a merge conflicts, it pushes `auto/cef-<version>-request` with the
+   new pins and a `rebase-request.json`, and starts a task for **GitHub
+   Copilot's cloud agent** on it. Copilot's setup steps
+   (`copilot-setup-steps.yml`) download the upstream files and merge up to the
+   first conflict; the agent resolves conflicts as `AGENTS.md` describes and
+   commits the rewritten patches. The workflow takes **only `patches/*.patch`**
+   from Copilot's branch; nothing else from it is used or run.
+4. It recomputes the patch blob identities, checks that the patches apply to
+   the new upstream files (`check-patches.ps1`) and that every patch still
+   touches exactly the files it touched before (`compare-patches.ps1`).
+5. It opens a pull request and requests a **Copilot code review**, following
+   `.github/copilot-instructions.md`. Only an approving review continues.
+6. It builds `auto/cef-<version>` with publishing on. The release checks run as
+   for any release, including **IronRDP's browser e2e suites** against the
+   Windows x64 candidate, and publishing fast-forwards `master` to the branch,
+   which also completes the pull request.
+
+Any failure publishes nothing and keeps one open issue for that release.
+
+One-time setup:
+
+- Secret `COPILOT_AGENT_TOKEN`: a fine-grained personal access token of a user
+  with Copilot, for this repository, with read and write access to **Agent
+  tasks**, **Contents**, **Pull requests** and **Issues**. Agent tasks and
+  Copilot reviews only accept user tokens, and they consume that user's
+  Copilot premium requests.
+- Copilot cloud agent enabled for this repository.
+- Copilot code review **approvals** enabled for this repository (they are off
+  by default); without them the review can only comment, and nothing is
+  published.
+- Optional variable `COPILOT_AGENT_MODEL` to choose the agent's model.
+
+### IronRDP e2e gate
+
+`ironrdp-e2e.yml` (also run on its own with a list of build run IDs) exports
+the Windows x64 candidate with the pinned cef-rs exporter, builds IronRDP's CEF
+browser server, agent and test fixtures at `ironrdp_commit` against it
+(`scripts/ironrdp-e2e.ps1`), and runs the browser suites: e2e, clipboard,
+downloads, devices, RDPDR policy, six media variants and shutdown. The release
+waits for it, so the runtime behavior the patches add is checked before any
+release is published.

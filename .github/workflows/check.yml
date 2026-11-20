@@ -13,7 +13,9 @@ jobs:
       - name: Check patch applicability against pinned sources
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pwsh -File scripts/check-patches.ps1
+        run: |
+          pwsh -File scripts/check-patches.ps1
+          pwsh -File tests/test_rebase.ps1
       - name: Check orchestration
         run: |
           pwsh -File scripts/stages.ps1 -Check

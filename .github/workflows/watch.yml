@@ -51,18 +51,29 @@ jobs:
           git push origin HEAD:master
           gh workflow run build.yml --ref master
           echo "Pinned CEF $VERSION and started a published build"
-      - name: Report patches that no longer apply
+      - name: Fix or report patches that no longer apply
         if: steps.upstream.outputs.update == 'true' && steps.patches.outcome == 'failure'
         env:
           VERSION: ${{ steps.upstream.outputs.selected_cef_version }}
+          RELEASE: ${{ steps.upstream.outputs.selected }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
+          # Fix patches rebases them (with Copilot for conflicts), once per release.
+          if [ "$APPLY" = true ] && ! git ls-remote --exit-code --heads origin "auto/cef-$RELEASE" > /dev/null; then
+            gh workflow run fix-patches.yml --ref master -f version="$RELEASE"
+            echo "The patches do not apply to CEF $VERSION; started Fix patches"
+            exit 0
+          fi
           {
             echo "The patches do not apply to CEF \`$VERSION\`, so it was not pinned or built."
             echo
-            echo "Rebase the failing patch, update its blob in \`scripts/candidate.ps1\`, and run \`./scripts/upstream.ps1 -Write\` to pin this release. Details: $RUN_URL"
+            if [ "$APPLY" = true ]; then
+              echo "**Fix patches** already ran for this release (branch \`auto/cef-$RELEASE\`); see its issue or pull request. Delete that branch to let it try again. Details: $RUN_URL"
+            else
+              echo "Automatic updates are off, so **Fix patches** was not started. Details: $RUN_URL"
+            fi
             echo
             echo '```'
             tail -n 40 "$RUNNER_TEMP/patches.log"

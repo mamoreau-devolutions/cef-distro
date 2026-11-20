@@ -37,7 +37,7 @@ permissions:
   actions: read
 jobs:
   plan:
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/auto/cef-')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -64,8 +64,23 @@ jobs:
       runs: ${{ inputs.runs }}
       targets: ${{ needs.plan.outputs.targets }}
 
+  # IronRDP's browser suites against the Windows x64 candidate: the runtime
+  # check that the patches still do what they are for.
+  ironrdp-e2e:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.targets), 'windows-x64')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/ironrdp-e2e.yml
+    with:
+      runs: ${{ inputs.runs }}
+
   release:
-    needs: [plan, native-smoke]
+    needs: [plan, native-smoke, ironrdp-e2e]
+    if: >-
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.native-smoke.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.ironrdp-e2e.result) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -171,6 +186,11 @@ jobs:
               echo "macOS is not included in this release; macOS builds are pending."
             fi
           } > notes.md
+          # A reviewed auto/cef-* branch becomes master first; the push is
+          # fast-forward only, so it fails if master has moved on.
+          if [ "$GITHUB_REF" != refs/heads/master ]; then
+            git push origin "$GITHUB_SHA:refs/heads/master"
+          fi
           gh release create "$tag" --target "$GITHUB_SHA" "${prerelease[@]}" \
             --title "Patched CEF ${version%%+*} (release $number)" --notes-file notes.md \
             -- release/*

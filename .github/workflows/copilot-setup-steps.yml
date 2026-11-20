@@ -1,0 +1,27 @@
+name: Copilot setup steps
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+jobs:
+  # Copilot's cloud agent runs this job before it starts. Setup steps are
+  # outside the agent's firewall, so they download the upstream files a
+  # requested rebase needs and merge up to the first conflict.
+  copilot-setup-steps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Prepare a requested patch rebase
+        if: hashFiles('rebase-request.json') != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/rebase-patches.ps1 -Start
+          # 2 means a patch conflicts and is waiting for the agent.
+          if ($LASTEXITCODE -notin 0, 2) { exit $LASTEXITCODE }
+          exit 0
