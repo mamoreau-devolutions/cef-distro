@@ -136,7 +136,7 @@ jobs:
               '.type == "minimal" and .name == $name and .sha1 == $sha1' "$output/archive.json" >/dev/null
             rm -rf -- "$work"
           done
-      - name: Publish prerelease
+      - name: Publish release
         if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -146,7 +146,16 @@ jobs:
         run: |
           set -euo pipefail
           version=$(jq -r .cef_version pins.json)
-          tag="cef-${version%%+*}-patched.${GITHUB_RUN_ID}"
+          # Releases of one upstream version count up: cef-156.0.31-patched.1, .2, ...
+          # Older tags ended in a run ID; their long suffixes are not counted.
+          base="cef-${version%%+*}-patched"
+          last=$(gh release list --limit 1000 --json tagName \
+            --jq "[.[].tagName | select(startswith(\"$base.\")) | ltrimstr(\"$base.\") | select(test(\"^[0-9]{1,4}$\")) | tonumber] | max // 0")
+          number=$((last + 1))
+          tag="$base.$number"
+          # Only a release with every supported target is a full release.
+          prerelease=()
+          if [ "$(echo "$TARGETS" | jq 'length')" -lt 6 ]; then prerelease=(--prerelease); fi
           links=$(echo "$RUNS" | jq -r --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs" \
             'map("[\(.)](\($url)/\(.))") | join(", ")')
           {
@@ -162,7 +171,7 @@ jobs:
               echo "macOS is not included in this release; macOS builds are pending."
             fi
           } > notes.md
-          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
-            --title "Patched CEF ${version%%+*} (build ${GITHUB_RUN_ID})" --notes-file notes.md \
+          gh release create "$tag" --target "$GITHUB_SHA" "${prerelease[@]}" \
+            --title "Patched CEF ${version%%+*} (release $number)" --notes-file notes.md \
             -- release/*
           echo "Published $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag"

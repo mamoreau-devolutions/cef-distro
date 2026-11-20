@@ -8,6 +8,22 @@ $CefPatchBlobs = [ordered]@{
     'disable-chromium-shutdown-signals.patch' = 'bd49755a5de794d2b7b16e865b00b2332611f770'
 }
 
+# Fetches an upstream file from GitHub, authenticated when GH_TOKEN is set and
+# retrying rate limits and server errors, which unauthenticated CI hits.
+function Invoke-UpstreamRequest([string]$Uri, [string]$OutFile) {
+    $request = @{ Uri = $Uri; TimeoutSec = 60 }
+    if ($env:GH_TOKEN) { $request.Headers = @{ Authorization = "Bearer $env:GH_TOKEN" } }
+    if ($OutFile) { $request.OutFile = $OutFile }
+    for ($attempt = 1; ; $attempt++) {
+        try { return Invoke-WebRequest @request }
+        catch {
+            $status = [int]$_.Exception.Response.StatusCode
+            if ($attempt -ge 4 -or ($status -ne 429 -and $status -lt 500)) { throw }
+            Start-Sleep -Seconds (20 * $attempt)
+        }
+    }
+}
+
 function Assert-PatchIdentity {
     foreach ($name in $CefPatchBlobs.Keys) {
         $actual = & git hash-object --no-filters -- (Join-Path $CefRoot 'patches' $name)
@@ -18,7 +34,7 @@ function Assert-PatchIdentity {
 
 function Assert-CefCompatibility {
     $url = "https://raw.githubusercontent.com/chromiumembedded/cef/$($CefPins.cef_commit)/CHROMIUM_BUILD_COMPATIBILITY.txt"
-    $compatibility = (Invoke-WebRequest -Uri $url -TimeoutSec 60).Content
+    $compatibility = (Invoke-UpstreamRequest $url).Content
     foreach ($item in @(
         @('chromium_checkout', "refs/tags/$($CefPins.chromium_tag)"),
         @('depot_tools_checkout', $CefPins.depot_tools_commit)

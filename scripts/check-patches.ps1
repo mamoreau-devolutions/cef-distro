@@ -31,7 +31,7 @@ try {
             $destination = Join-Path $directory $path
             New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
             $url = "https://raw.githubusercontent.com/$($tree.Repository)/$($tree.Revision)/$path"
-            Invoke-WebRequest -Uri $url -TimeoutSec 60 -OutFile $destination
+            Invoke-UpstreamRequest $url $destination | Out-Null
         }
         foreach ($name in $tree.Patches) {
             $patch = Join-Path $CefRoot 'patches' $name

@@ -11,12 +11,15 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Check patch applicability against pinned sources
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: pwsh -File scripts/check-patches.ps1
       - name: Check orchestration
         run: |
           pwsh -File scripts/stages.ps1 -Check
           pwsh -File tests/test_publish.ps1
           pwsh -File tests/test_targets.ps1
+          pwsh -File tests/test_upstream.ps1
       - name: Hosted runner capacity
         run: |
           df -h .

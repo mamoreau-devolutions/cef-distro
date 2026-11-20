@@ -1,36 +1,81 @@
-name: Watch upstream CEF
+name: Follow upstream CEF
 on:
   schedule:
-    - cron: '21 9 * * *'
+    - cron: '21 */6 * * *'
   workflow_dispatch:
+    inputs:
+      apply:
+        description: Commit the new pins and start a published build (otherwise only report)
+        type: boolean
+        default: false
 permissions:
-  contents: read
+  contents: write
+  actions: write
   issues: write
+concurrency:
+  group: follow-upstream
+  cancel-in-progress: false
 jobs:
-  watch:
+  follow:
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      # Scheduled runs change pins only when the repository variable opts in.
+      APPLY: ${{ (github.event_name == 'workflow_dispatch' && inputs.apply) || (github.event_name == 'schedule' && vars.CEF_AUTO_UPDATE == 'true') }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Maintain one update issue
+      - name: Find the newest stable release on the pinned branch
+        id: upstream
+        shell: pwsh
+        run: ./scripts/upstream.ps1 -Write
+      - name: Check that the patches apply to it
+        id: patches
+        if: steps.upstream.outputs.update == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pwsh -File scripts/check-patches.ps1 2>&1 | tee "$RUNNER_TEMP/patches.log"
+      - name: Commit the pins and start a published build
+        if: steps.upstream.outputs.update == 'true' && steps.patches.outcome == 'success' && env.APPLY == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.upstream.outputs.selected_cef_version }}
         shell: bash
         run: |
           set -euo pipefail
-          branch=$(jq -r .cef_branch pins.json)
-          pinned=$(jq -r .cef_commit pins.json)
-          latest=$(git ls-remote https://github.com/chromiumembedded/cef.git "refs/heads/$branch" | cut -f1)
-          test "${#latest}" -eq 40
-          if [ "$latest" = "$pinned" ]; then exit 0; fi
-          title="CEF upstream update available"
-          body="Pinned CEF: $pinned
-          Branch $branch head: $latest
-
-          Review compatibility, patch applicability, native builds, runtime tests, and coordinated cef-rs upgrades before changing pins or publishing. Milestone upgrades require an explicit decision."
-          number=$(gh api --paginate "repos/$GH_REPO/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null and .title == "CEF upstream update available") | .number' | head -n 1)
-          if [ -n "$number" ]; then
-            gh api -X PATCH "repos/$GH_REPO/issues/$number" -f body="$body" > /dev/null
-          else
-            gh api "repos/$GH_REPO/issues" -f title="$title" -f body="$body" > /dev/null
-          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore(pins): follow CEF ${VERSION%%+*}" -m "Pins CEF $VERSION from the pinned branch; the patches apply unchanged." -- pins.json
+          git push origin HEAD:master
+          gh workflow run build.yml --ref master
+          echo "Pinned CEF $VERSION and started a published build"
+      - name: Report patches that no longer apply
+        if: steps.upstream.outputs.update == 'true' && steps.patches.outcome == 'failure'
+        env:
+          VERSION: ${{ steps.upstream.outputs.selected_cef_version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "The patches do not apply to CEF \`$VERSION\`, so it was not pinned or built."
+            echo
+            echo "Rebase the failing patch, update its blob in \`scripts/candidate.ps1\`, and run \`./scripts/upstream.ps1 -Write\` to pin this release. Details: $RUN_URL"
+            echo
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/patches.log"
+            echo '```'
+          } > body.md
+          ./scripts/issue.sh "Patches do not apply to the newest CEF release" body.md
+          exit 1
+      - name: Report a newer stable CEF milestone
+        if: steps.upstream.outputs.new_major != ''
+        env:
+          MAJOR: ${{ steps.upstream.outputs.new_major }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' "CEF $MAJOR has a stable release for every target. Moving to it changes the pinned branch, depot_tools and the cef-rs revision, so it needs an explicit decision and coordinated consumer changes; this workflow keeps following the pinned branch until then." > body.md
+          ./scripts/issue.sh "CEF $MAJOR is stable" body.md

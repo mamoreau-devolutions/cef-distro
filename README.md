@@ -3,7 +3,7 @@
 This repository holds ordered patches and build automation, not a CEF fork.
 GitHub Actions builds pinned upstream CEF/Chromium with the IronRDP patches on
 free GitHub-hosted runners and publishes the unmodified CEF `--minimal`
-distributions as GitHub prereleases for a cef-rs fork to consume.
+distributions as GitHub releases for a cef-rs fork to consume.
 
 CI verifies patch identity, pinned checkouts and the patched `libcef` exports.
 Before publishing, it also loads each library on a native runner and checks
@@ -15,14 +15,15 @@ ARM64 has been validated at runtime; run those tests (`e2e.py`, `clipboard.py`,
 ## Pins and provenance
 
 `pins.json` records the immutable CEF, Chromium, depot_tools, cef-rs and
-IronRDP revisions, plus the Git blob of CEF's `automate-git.py`:
+IronRDP revisions, plus the Git blob of CEF's `automate-git.py`. It is the
+source of truth, and the update workflow advances it along the CEF branch:
 
-- CEF branch `8078` at `8ea0c73b5dbed1389c8dafb911a98c41246bb8cb`
-  (`156.0.26+g8ea0c73+chromium-156.0.8078.88`).
-- Chromium `refs/tags/156.0.8078.88` = `8954d18543712dc11b97c3aca0a6e714aa2d7dcd`,
-  checked against CEF's `CHROMIUM_BUILD_COMPATIBILITY.txt`.
-- depot_tools `132599ebbd8d22d1b1bd5ea703a6d3bc493edd71`.
-- cef-rs `9aa78c450489eddb828eb982eaee6c104a89d348` (`156.4.0+156.0.26`).
+- `cef_branch`, `cef_commit` and `cef_version`: the CEF release branch (`8078`,
+  the 156 milestone) and the release on it.
+- `chromium_tag` and `chromium_commit`, checked against CEF's
+  `CHROMIUM_BUILD_COMPATIBILITY.txt`, and `depot_tools_commit` from the same file.
+- `cef_rs_commit`: the cef-rs revision whose exporter the release smoke test uses.
+- `ironrdp_commit`: the IronRDP revision the patches come from.
 
 The five unchanged patches come from
 [IronRDP `ironrdp-browser` server/cef/patches at 64168d20](https://github.com/Devolutions/IronRDP/tree/64168d204f4369b6657b233bf7e6121c5acc0271/server/cef/patches).
@@ -49,7 +50,7 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
   `windows-arm64`, `macos-x64`, `macos-arm64` (default: all six).
 - `skip-macos`: drop the macOS targets from `targets`. macOS builds are
   deferred, not removed; leave this unset to build macOS again.
-- `publish`: create one prerelease when every requested target succeeds.
+- `publish`: create one release when every requested target succeeds.
 - `stage-minutes`: build time per stage (default 280; lower only to test
   resumption). macOS stages build at most 190 minutes, because hosted macOS
   runners have started losing files and dropping off about four hours into a
@@ -97,8 +98,11 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    that its manifest carries this checkout's pins and patch blobs and matches
    the archive actually smoke-tested, imports each archive with the pinned
    cef-rs exporter, and checks the resulting library's architecture and
-   essential files. It then publishes a prerelease tagged
-   `cef-<cef version>-patched.<run id>`. Dispatch **Publish release** directly
+   essential files. It then publishes a release tagged
+   `cef-<cef version>-patched.<n>`, where `n` counts the releases of that
+   upstream version from 1 (tags from before this scheme end in a run ID). A
+   release missing any of the six targets is marked as a prerelease.
+   Dispatch **Publish release** directly
    with a JSON list of run IDs to assemble targets built by different runs
    (earlier runs win). Set `dry-run` to verify without publishing, and
    `skip-macos` to release only Linux and Windows while macOS is pending.
@@ -159,8 +163,24 @@ instead download from the release URL in its build script; either way:
 
 ## Updates
 
-The daily `Watch` workflow compares the pinned release branch head with the
-pinned CEF revision and keeps one open issue for review. It never updates pins,
-opens PRs, triggers builds or ships binaries. Updating means editing
-`pins.json` (and patch identities if patches change), then dispatching a build.
-Milestone upgrades need an explicit decision and coordinated consumer changes.
+Every six hours, **Follow upstream CEF** (`watch.yml`) reads CEF's builds index
+(`cef-builds.spotifycdn.com/index.json`) for the newest release that is stable
+for all six targets on the pinned branch. `scripts/upstream.ps1` resolves its
+pins from upstream: the CEF commit (which must be on the pinned branch), the
+Chromium tag and depot_tools commit from that commit's
+`CHROMIUM_BUILD_COMPATIBILITY.txt`, the Chromium commit for the tag, and the
+`automate-git.py` blob. cef-rs and IronRDP pins stay, because a release on the
+same branch keeps the CEF API.
+
+If the patches apply unchanged (`scripts/check-patches.ps1`), the workflow
+commits the new pins to `master` and dispatches a published build, so a clean
+upstream release turns into a release here without intervention. Scheduled runs
+only do this when the repository variable `CEF_AUTO_UPDATE` is `true`;
+otherwise, and when dispatched without `apply`, they only report. When the
+patches no longer apply, it keeps one open issue with the failure and pins
+nothing. When a newer milestone is stable for every target, it keeps one open
+issue for that decision; moving to a milestone changes the branch, depot_tools
+and cef-rs, and needs coordinated consumer changes.
+
+To pin a specific release on the branch by hand, run
+`./scripts/upstream.ps1 -Version <cef version> -Write`.
