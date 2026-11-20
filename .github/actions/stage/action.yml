@@ -1,9 +1,10 @@
 name: CEF build stage
 description: >-
-  Run one resumable stage of a patched CEF build on a GitHub-hosted runner. Stage 1
-  syncs and patches the pinned sources; later stages restore the previous stage's
-  tree. Each stage builds until its deadline, then either packages the minimal
-  distribution or saves the tree for the next stage.
+  Run one resumable stage of a patched CEF build on a GitHub-hosted runner. Each
+  stage restores the newest tree saved earlier in the run (or in resume-run), or
+  syncs and patches the pinned sources when there is none. It builds until its
+  deadline, then either packages the minimal distribution or saves the tree for
+  the next stage.
 inputs:
   target:
     description: Target such as linux-x64 or windows-arm64
@@ -11,16 +12,12 @@ inputs:
   stage:
     description: Stage number starting at 1
     required: true
-  previous:
-    description: Previous stage number (empty for stage 1)
-    required: false
-    default: ""
   budget-minutes:
     description: Minutes after job start at which ninja is stopped gracefully
     required: false
     default: "280"
   resume-run:
-    description: For stage 1, an earlier run ID whose newest saved tree for this target replaces the sync
+    description: An earlier run ID whose newest saved tree for this target replaces the sync when this run has saved none
     required: false
     default: ""
 outputs:
@@ -125,22 +122,25 @@ runs:
         RESUME_RUN: ${{ inputs.resume-run }}
         TARGET: ${{ inputs.target }}
         STAGE: ${{ inputs.stage }}
-        PREVIOUS: ${{ inputs.previous }}
       run: |
         set -euo pipefail
-        if [ "$STAGE" != 1 ]; then
-          echo "name=tree-$TARGET-$PREVIOUS" >> "$GITHUB_OUTPUT"
-        elif [ -n "$RESUME_RUN" ]; then
-          name=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN/artifacts?per_page=100" \
+        # The newest tree, not the previous stage's: after a stage fails or loses
+        # its runner without saving, the retry resumes from the last good tree.
+        newest() {
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$1/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.expired | not) | .name' \
-            | grep -E "^tree-$TARGET-[0-9]+$" | awk -F- '{ print $NF, $0 }' | sort -n | tail -1 | cut -d' ' -f2 || true)
-          if [ -n "$name" ]; then
-            echo "Resuming $name from run $RESUME_RUN"
-            echo "name=$name" >> "$GITHUB_OUTPUT"
-            echo "run=$RESUME_RUN" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No saved $TARGET tree in run $RESUME_RUN; syncing from scratch"
-          fi
+            | grep -E "^tree-$TARGET-[0-9]+$" | awk -F- '{ print $NF, $0 }' | sort -n | tail -1 | cut -d' ' -f2 || true
+        }
+        name=$(newest "$GITHUB_RUN_ID")
+        if [ -n "$name" ]; then
+          echo "Resuming $name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+        elif [ -n "$RESUME_RUN" ] && name=$(newest "$RESUME_RUN") && [ -n "$name" ]; then
+          echo "Resuming $name from run $RESUME_RUN"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "run=$RESUME_RUN" >> "$GITHUB_OUTPUT"
+        elif [ "$STAGE" != 1 ] || [ -n "$RESUME_RUN" ]; then
+          echo "::notice::No saved $TARGET tree to resume; syncing from scratch"
         fi
 
     - name: Sync, patch, and generate build files
@@ -206,8 +206,8 @@ runs:
         retention-days: 14
         compression-level: 0
 
-    # A finished build whose distribution fails keeps its tree, so a resume-run
-    # retries only the distribution instead of the last build stage.
+    # A finished build whose distribution fails keeps its tree, so a retry stage
+    # or resume-run redoes only the distribution instead of the last build stage.
     - name: Save tree for next stage
       if: steps.build.outputs.complete == 'false' || (failure() && steps.distrib.outcome == 'failure')
       shell: bash

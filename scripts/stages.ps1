@@ -27,12 +27,17 @@ $lines.AddRange([string[]]@(
 foreach ($stage in 1..16) {
     $lines.Add("  s${stage}:")
     $lines.Add("    name: stage $stage")
-    if ($stage -gt 1) {
+    # A stage continues an unfinished build, or retries once after a stage that
+    # failed (including a lost runner) by restoring the newest tree the run saved;
+    # two failures in a row stop the chain.
+    if ($stage -eq 2) {
+        $lines.Add('    needs: s1')
+        $lines.Add("    if: `${{ !cancelled() && needs.s1.result != 'skipped' && needs.s1.outputs.complete != 'true' }}")
+    } elseif ($stage -gt 2) {
         $previous = $stage - 1
-        $lines.Add("    needs: s$previous")
-        $lines.Add("    if: `${{ !cancelled() && needs.s$previous.outputs.complete == 'false' }}")
-    } else {
-        $previous = ''
+        $before = $stage - 2
+        $lines.Add("    needs: [s$previous, s$before]")
+        $lines.Add("    if: `${{ !cancelled() && needs.s$previous.result != 'skipped' && needs.s$previous.outputs.complete != 'true' && (needs.s$previous.result == 'success' || needs.s$before.result == 'success') }}")
     }
     $lines.AddRange([string[]]@(
         "    runs-on: `${{ fromJSON('$runners')[inputs.target] }}",
@@ -46,12 +51,9 @@ foreach ($stage in 1..16) {
         '        with:',
         '          target: ${{ inputs.target }}',
         "          stage: `"$stage`"",
-        "          previous: `"$previous`"",
-        '          budget-minutes: ${{ inputs.stage-minutes }}'
+        '          budget-minutes: ${{ inputs.stage-minutes }}',
+        '          resume-run: ${{ inputs.resume-run }}'
     ))
-    if ($stage -eq 1) {
-        $lines.Add('          resume-run: ${{ inputs.resume-run }}')
-    }
 }
 $needs = (1..16 | ForEach-Object { "s$_" }) -join ', '
 $lines.AddRange([string[]]@(

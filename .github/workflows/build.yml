@@ -60,7 +60,9 @@ jobs:
 
   release:
     needs: [plan, build]
-    if: inputs.publish
+    # A stage that failed and was retried still fails its target's job, so do not
+    # require success here: release.yml refuses targets without a candidate.
+    if: ${{ !cancelled() && inputs.publish }}
     permissions:
       contents: write
       actions: read

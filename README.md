@@ -54,10 +54,10 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
   resumption). macOS stages build at most 190 minutes, because hosted macOS
   runners have started losing files and dropping off about four hours into a
   job, well inside the six-hour job limit.
-- `resume-run`: an earlier run ID; each target's stage 1 restores that run's
-  newest saved tree instead of syncing (use after a runner loss or failure).
-  A finished build whose distribution step fails also saves its tree, so
-  resuming it retries only the distribution.
+- `resume-run`: an earlier run ID; a target whose run has saved no tree yet
+  restores that run's newest saved tree instead of syncing (use after a run
+  ends without a candidate). A finished build whose distribution step fails
+  also saves its tree, so resuming it retries only the distribution.
   Trees must have matching host-architecture metadata; older trees without it
   and Intel macOS trees cannot resume on Apple Silicon.
 
@@ -83,6 +83,11 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    absolute path and ninja resumes. Saving records each part's SHA-256 in
    `tree.sha256` and decodes the stored parts, packing once more if they are
    corrupt; restoring checks those hashes before extracting anything.
+   Each stage restores the newest tree its run has saved, so when a stage fails
+   or its runner is lost, the next stage retries from the last good tree. Two
+   failed stages in a row stop the target. A retried target's job still shows
+   the failed stage, so the release job runs unless the run was cancelled and
+   publishes only when every target has a candidate.
 4. **The finishing** stage runs `make_distrib.py --minimal`, then
    `scripts/release.ps1` checks the standard archive name and top-level
    directory, and verifies the 14 patched exports in `libcef`. The candidate
