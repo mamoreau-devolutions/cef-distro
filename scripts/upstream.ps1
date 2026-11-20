@@ -104,7 +104,7 @@ if (-not $SelectOnly -and ($update -or $Version)) {
     if ($Write) {
         $json = ($pins | ConvertTo-Json) -creplace "`r`n", "`n"
         [IO.File]::WriteAllText($pinsPath, $json + "`n", [Text.UTF8Encoding]::new($false))
-        Write-Host "Pinned CEF $($selected.CefVersion)"
+        Write-Host "Wrote pins.json for CEF $($selected.CefVersion)"
     }
     $result.pins = $pins
 }
