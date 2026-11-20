@@ -3,6 +3,9 @@ $repo = Split-Path $PSScriptRoot -Parent
 $script = Join-Path $repo 'scripts' 'upstream.ps1'
 $pinned = (Get-Content -Raw -Encoding utf8 (Join-Path $repo 'pins.json') | ConvertFrom-Json).cef_version
 $major = [int]$pinned.Split('.')[0]
+# Release numbers relative to the pinned one, so the test follows pins.json.
+$patch = [int]($pinned.Split('+')[0].Split('.')[2])
+function Newer([int]$By) { "$major.0.$($patch + $By)" }
 $temp = Join-Path ([IO.Path]::GetTempPath()) "cef-upstream-test-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $temp | Out-Null
 
@@ -26,12 +29,13 @@ function Select-Upstream([hashtable]$Extra, [string[]]$Arguments = @()) {
 }
 
 try {
-    # Numeric order (31 beats 9), betas and releases missing a target are ignored.
+    # Numeric order (+100 beats +9 although "9" sorts after "1" as text), betas
+    # and releases missing a target are ignored.
     $result = Select-Upstream @{
-        All = @((Release "$major.0.9"), (Release "$major.0.31"), (Release "$major.0.40" 'beta'))
-        windows64 = @(Release "$major.0.35")
+        All = @((Release (Newer 9)), (Release (Newer 100)), (Release (Newer 200) 'beta'))
+        windows64 = @(Release (Newer 150))
     }
-    if ($result.selected -cne "$major.0.31" -or -not $result.update -or $result.new_major) {
+    if ($result.selected -cne (Newer 100) -or -not $result.update -or $result.new_major) {
         throw "Unexpected selection: $($result | ConvertTo-Json -Compress)"
     }
 
@@ -48,10 +52,10 @@ try {
     if ($result.update -or $result.selected -cne $result.pinned) { throw 'Reported an update without a newer release' }
 
     # A requested version must be a stable release on the pinned branch.
-    $result = Select-Upstream @{ All = @((Release "$major.0.30"), (Release "$major.0.31")) } @('-Version', "$major.0.30")
-    if ($result.selected -cne "$major.0.30") { throw 'Did not select the requested version' }
+    $result = Select-Upstream @{ All = @((Release (Newer 3)), (Release (Newer 4))) } @('-Version', (Newer 3))
+    if ($result.selected -cne (Newer 3)) { throw 'Did not select the requested version' }
     $failed = $false
-    try { Select-Upstream @{ All = @() } @('-Version', "$major.0.99") | Out-Null } catch { $failed = $true }
+    try { Select-Upstream @{ All = @() } @('-Version', (Newer 999)) | Out-Null } catch { $failed = $true }
     if (-not $failed) { throw 'Accepted a version that is not released' }
     Write-Host 'upstream tests passed'
 } finally {
