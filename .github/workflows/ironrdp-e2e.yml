@@ -60,6 +60,14 @@ jobs:
           cargo run --quiet --manifest-path cef-rs/Cargo.toml -p export-cef-dir -- `
             --target x86_64-pc-windows-msvc --archive $archive.FullName "$env:RUNNER_TEMP\cef"
           if ($LASTEXITCODE -ne 0) { throw 'Export failed' }
+      # Real-time scanning holds files in fresh browser profiles open, so the
+      # server's profile removal at shutdown fails on hosted runners. The build
+      # stages turn it off for the same reason.
+      - name: Stop real-time malware scanning
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP -ErrorAction SilentlyContinue
       - name: Build IronRDP against it and run the browser suites
         shell: pwsh
         run: ./scripts/ironrdp-e2e.ps1 -IronRdp ironrdp -Cef "$env:RUNNER_TEMP\cef" -Artifacts "$env:RUNNER_TEMP\e2e"
