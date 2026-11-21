@@ -47,7 +47,7 @@ function Save-Files($Tree, [string]$Revision, [string[]]$Paths, [string]$Directo
         $destination = Join-Path $Directory $path
         New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
         try {
-            Invoke-UpstreamRequest "https://raw.githubusercontent.com/$($Tree.Repository)/$Revision/$path" $destination | Out-Null
+            Invoke-UpstreamRequest $Tree.Repository $Revision $path $destination | Out-Null
         } catch {
             if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
             Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue

@@ -81,7 +81,9 @@ function Write-TreeParts([string]$Directory, [string]$Output) {
         if ($IsWindows) {
             Write-CefWindowsTree $Directory $compress.StandardInput.BaseStream
         } else {
-            $format = if ($IsLinux) { @('--format=posix') } else { @('--format', 'pax') }
+            # macOS bsdtar probes every file for holes, and lseek(SEEK_HOLE) has
+            # failed on build outputs there; build trees have no sparse files to keep.
+            $format = if ($IsLinux) { @('--format=posix') } else { @('--format', 'pax', '--no-read-sparse') }
             $tarProcess = Start-StreamProcess $tar (@($format) + @('-cf', '-', '-C', $Directory, '.')) $false $true
             $tarProcess.StandardOutput.BaseStream.CopyTo($compress.StandardInput.BaseStream)
             $tarProcess.WaitForExit()

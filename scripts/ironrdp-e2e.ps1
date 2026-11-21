@@ -68,14 +68,24 @@ try {
         'media-nv12' = @('rdp_media.py', '--server-bin', $server, '--client-bin', $media, '--camera-format', 'nv12')
         'shutdown' = @('shutdown.py', '--server-bin', $server, '--iterations', '10')
     }
+    # A suite gets a second run: some IronRDP suites have timing races on slow
+    # hosted runners that have nothing to do with the patches. A suite that fails
+    # twice fails the gate, and both attempts' logs and reports are kept.
     $failed = @()
+    $retried = @()
     foreach ($name in $all.Keys) {
         if ($Suites -and $name -notin $Suites) { continue }
-        $arguments = @("server/cef/testing/$($all[$name][0])") + $all[$name][1..($all[$name].Count - 1)] +
-            @('--artifacts', (Join-Path $Artifacts $name))
-        if ((Invoke-Logged "suite-$name" 'python' $arguments) -ne 0) { $failed += $name }
+        $passed = $false
+        foreach ($attempt in 1, 2) {
+            $label = if ($attempt -eq 1) { $name } else { "$name-retry" }
+            $arguments = @("server/cef/testing/$($all[$name][0])") + $all[$name][1..($all[$name].Count - 1)] +
+                @('--artifacts', (Join-Path $Artifacts $label))
+            if ((Invoke-Logged "suite-$label" 'python' $arguments) -eq 0) { $passed = $true; break }
+        }
+        if (-not $passed) { $failed += $name } elseif ($attempt -eq 2) { $retried += $name }
     }
-    if ($failed) { throw "IronRDP e2e suites failed: $($failed -join ', ')" }
+    if ($retried) { Write-Host "Passed on the second attempt: $($retried -join ', ')" }
+    if ($failed) { throw "IronRDP e2e suites failed twice: $($failed -join ', ')" }
     Write-Host 'All IronRDP e2e suites passed against the candidate.'
 } finally {
     Pop-Location

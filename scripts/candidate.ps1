@@ -8,11 +8,23 @@ $CefPatchBlobs = [ordered]@{
     'disable-chromium-shutdown-signals.patch' = 'bd49755a5de794d2b7b16e865b00b2332611f770'
 }
 
-# Fetches an upstream file from GitHub, authenticated when GH_TOKEN is set and
-# retrying rate limits and server errors, which unauthenticated CI hits.
-function Invoke-UpstreamRequest([string]$Uri, [string]$OutFile) {
-    $request = @{ Uri = $Uri; TimeoutSec = 60 }
-    if ($env:GH_TOKEN) { $request.Headers = @{ Authorization = "Bearer $env:GH_TOKEN" } }
+# Fetches a file from a GitHub repository at a revision, retrying rate limits
+# and server errors. With GH_TOKEN it uses the REST contents API, which is
+# limited per token; raw.githubusercontent.com is limited per IP address and
+# throttles shared CI runners even when authenticated.
+function Invoke-UpstreamRequest([string]$Repository, [string]$Revision, [string]$Path, [string]$OutFile) {
+    $request = @{ TimeoutSec = 60 }
+    if ($env:GH_TOKEN) {
+        $escaped = ($Path -split '/' | ForEach-Object { [uri]::EscapeDataString($_) }) -join '/'
+        $request.Uri = "https://api.github.com/repos/$Repository/contents/${escaped}?ref=$Revision"
+        $request.Headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github.raw+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+        }
+    } else {
+        $request.Uri = "https://raw.githubusercontent.com/$Repository/$Revision/$Path"
+    }
     if ($OutFile) { $request.OutFile = $OutFile }
     for ($attempt = 1; ; $attempt++) {
         try { return Invoke-WebRequest @request }
@@ -54,7 +66,7 @@ function Save-UpstreamFiles($Tree, [string]$Revision, [string[]]$Paths, [string]
     foreach ($path in $Paths) {
         $destination = Join-Path $Directory $path
         New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
-        Invoke-UpstreamRequest "https://raw.githubusercontent.com/$($Tree.Repository)/$Revision/$path" $destination | Out-Null
+        Invoke-UpstreamRequest $Tree.Repository $Revision $path $destination | Out-Null
     }
 }
 
@@ -82,8 +94,8 @@ function Assert-PatchIdentity {
 }
 
 function Assert-CefCompatibility {
-    $url = "https://raw.githubusercontent.com/chromiumembedded/cef/$($CefPins.cef_commit)/CHROMIUM_BUILD_COMPATIBILITY.txt"
-    $compatibility = (Invoke-UpstreamRequest $url).Content
+    $content = (Invoke-UpstreamRequest 'chromiumembedded/cef' $CefPins.cef_commit 'CHROMIUM_BUILD_COMPATIBILITY.txt').Content
+    $compatibility = if ($content -is [byte[]]) { [Text.Encoding]::UTF8.GetString($content) } else { $content }
     foreach ($item in @(
         @('chromium_checkout', "refs/tags/$($CefPins.chromium_tag)"),
         @('depot_tools_checkout', $CefPins.depot_tools_commit)
