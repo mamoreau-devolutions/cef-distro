@@ -26,8 +26,10 @@ source of truth, and the update workflow advances it along the CEF branch:
 - `ironrdp_commit`: the IronRDP revision the patches come from.
 
 The five unchanged patches come from
-[IronRDP `ironrdp-browser` server/cef/patches at c18e1225](https://github.com/Devolutions/IronRDP/tree/c18e1225442259ca075953636fd763a2a0fc60bd/server/cef/patches),
-whose browser e2e suites also gate every release (see below).
+[IronRDP `ironrdp-browser` server/cef/patches at 64168d20](https://github.com/Devolutions/IronRDP/tree/64168d204f4369b6657b233bf7e6121c5acc0271/server/cef/patches).
+IronRDP's browser e2e suites gate every release (see below), from the revision
+in `ironrdp-tests.json`; it is not a build pin, so it can move without changing
+the manifests of builds already made.
 IronRDP is licensed under MIT or Apache-2.0; both license texts are included.
 `scripts/candidate.ps1` verifies their Git blob identities; update those deliberately
 when changing patches.
@@ -233,7 +235,7 @@ One-time setup:
 
 `ironrdp-e2e.yml` (also run on its own with a list of build run IDs) exports
 the Windows x64 candidate with the pinned cef-rs exporter, builds IronRDP's CEF
-browser server, agent and test fixtures at `ironrdp_commit` against it
+browser server, agent and test fixtures at the `ironrdp-tests.json` revision against it
 (`scripts/ironrdp-e2e.ps1`), and runs the browser suites: e2e, clipboard,
 downloads, devices, RDPDR policy, six media variants and shutdown. The release
 waits for it, so the runtime behavior the patches add is checked before any

@@ -26,7 +26,9 @@ jobs:
         shell: pwsh
         run: |
           $pins = Get-Content -Raw pins.json | ConvertFrom-Json
-          "ironrdp=$($pins.ironrdp_commit)" >> $env:GITHUB_OUTPUT
+          # The IronRDP revision whose suites gate releases; not a build pin.
+          $tests = Get-Content -Raw ironrdp-tests.json | ConvertFrom-Json
+          "ironrdp=$($tests.ironrdp_commit)" >> $env:GITHUB_OUTPUT
           "cef_rs=$($pins.cef_rs_commit)" >> $env:GITHUB_OUTPUT
       - name: Download the Windows x64 candidate
         shell: pwsh
