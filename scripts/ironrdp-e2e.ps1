@@ -7,7 +7,11 @@ param(
     [Parameter(Mandatory)][string]$Cef,
     [Parameter(Mandatory)][string]$Artifacts,
     # Run only these suites (names as listed below).
-    [string[]]$Suites
+    [string[]]$Suites,
+    # The cef-rs revision released for the candidate's CEF version. IronRDP's
+    # cef-rs dependency moves to it, as IronRDP must to use this release; with an
+    # older cef-rs, the build would silently use stock CEF instead.
+    [string]$CefRs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,11 +43,27 @@ function Invoke-Logged([string]$Name, [string]$Executable, [string[]]$Arguments)
 
 Push-Location $IronRdp
 try {
+    $serverLock = '--locked'
+    if ($CefRs) {
+        $manifest = Join-Path $IronRdp 'server/cef/Cargo.toml'
+        $text = [IO.File]::ReadAllText($manifest)
+        $pattern = '(git = "https://github.com/tauri-apps/cef-rs", rev = ")([0-9a-f]{40})(")'
+        $current = [regex]::Match($text, $pattern)
+        if (-not $current.Success) { throw 'IronRDP does not depend on cef-rs by revision as expected' }
+        if ($current.Groups[2].Value -cne $CefRs) {
+            Write-Host "Moving IronRDP's cef-rs dependency from $($current.Groups[2].Value) to $CefRs"
+            [IO.File]::WriteAllText($manifest, [regex]::Replace($text, $pattern, "`${1}$CefRs`${3}"))
+            # The lockfile then matches the manifest again, so builds stay --locked.
+            if ((Invoke-Logged 'update-cef-rs' 'cargo' @('update', '--manifest-path', 'server/cef/Cargo.toml', '-p', 'cef')) -ne 0) {
+                throw 'Updating cef-rs failed'
+            }
+        }
+    }
     $builds = [ordered]@{
-        'build-bundle' = @('run', '--locked', '--manifest-path', 'server/cef/Cargo.toml', '--features', 'bundle', '--bin', 'package-cef')
+        'build-bundle' = @('run', $serverLock, '--manifest-path', 'server/cef/Cargo.toml', '--features', 'bundle', '--bin', 'package-cef')
         'build-agent' = @('build', '--locked', '-p', 'ironrdp-agent')
-        'build-media-fixture' = @('build', '--locked', '--manifest-path', 'server/cef/Cargo.toml', '--features', 'media-fixture', '--bin', 'rdp-media-fixture')
-        'build-rdpdr-fixture' = @('build', '--locked', '--manifest-path', 'server/cef/Cargo.toml', '--features', 'runtime', '--bin', 'rdpdr-policy-fixture')
+        'build-media-fixture' = @('build', $serverLock, '--manifest-path', 'server/cef/Cargo.toml', '--features', 'media-fixture', '--bin', 'rdp-media-fixture')
+        'build-rdpdr-fixture' = @('build', $serverLock, '--manifest-path', 'server/cef/Cargo.toml', '--features', 'runtime', '--bin', 'rdpdr-policy-fixture')
     }
     foreach ($name in $builds.Keys) {
         if ((Invoke-Logged $name 'cargo' $builds[$name]) -ne 0) { throw "$name failed" }

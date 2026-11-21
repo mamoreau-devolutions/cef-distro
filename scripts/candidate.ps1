@@ -36,6 +36,24 @@ function Invoke-UpstreamRequest([string]$Repository, [string]$Revision, [string]
     }
 }
 
+# The cef-rs revision released for a CEF version (for example 156.0.31), or
+# $null. cef-rs only accepts CEF archives up to the version it was generated
+# for; with a newer one it silently downloads stock CEF instead, so consumers
+# need the cef-rs release made for the CEF version they use.
+function Get-CefRsCommit([string]$CefVersion) {
+    $headers = @{ Accept = 'application/vnd.github+json' }
+    if ($env:GH_TOKEN) { $headers.Authorization = "Bearer $env:GH_TOKEN" }
+    for ($page = 1; $page -le 5; $page++) {
+        # Invoke-RestMethod returns the JSON array as one object; unroll it.
+        $tags = @((Invoke-RestMethod -Headers $headers -TimeoutSec 60 `
+            -Uri "https://api.github.com/repos/tauri-apps/cef-rs/tags?per_page=100&page=$page") | ForEach-Object { $_ })
+        $match = $tags | Where-Object { $_.name.EndsWith("+$CefVersion", [StringComparison]::Ordinal) } | Select-Object -First 1
+        if ($match) { return $match.commit.sha }
+        if ($tags.Count -lt 100) { return $null }
+    }
+    return $null
+}
+
 # Patches apply in this order, each tree from its own pinned upstream revision.
 $CefPatchTrees = @(
     @{

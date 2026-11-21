@@ -60,6 +60,24 @@ $selected = if ($Version) {
     if ($match.Count -ne 1) { throw "CEF $Version is not a stable release on the pinned $($pinned.Major) branch" }
     $match[0]
 } elseif ($branch.Count) { $branch[-1] } else { $pinned }
+# IronRDP can only use a release that cef-rs supports (see Get-CefRsCommit), so
+# follow the newest release that cef-rs has a release for, and wait for the rest.
+$cefRs = $null
+$waiting = ''
+if (-not $SelectOnly -and ($Version -or $selected.Number -gt $pinned.Number)) {
+    . (Join-Path $PSScriptRoot 'candidate.ps1')
+    $newer = if ($Version) { @($selected) } else {
+        @($branch | Where-Object { $_.Number -gt $pinned.Number } | Sort-Object Number -Descending)
+    }
+    foreach ($release in $newer) {
+        $cefRs = Get-CefRsCommit "$($release.Number)"
+        if ($cefRs) { break }
+        if (-not $waiting) { $waiting = "$($release.Number)" }
+        Write-Host "cef-rs has no release for CEF $($release.Number) yet"
+    }
+    if ($Version -and -not $cefRs) { throw "cef-rs has no release for CEF $Version yet" }
+    $selected = if ($cefRs) { $release } else { $pinned }
+}
 $update = $selected.Number -gt $pinned.Number
 $newestMajor = ($releases | Measure-Object -Property Major -Maximum).Maximum
 $newMajor = if ($newestMajor -gt $pinned.Major) { "$newestMajor" } else { '' }
@@ -70,6 +88,7 @@ $result = [ordered]@{
     selected_cef_version = $selected.CefVersion
     update = $update
     new_major = $newMajor
+    waiting_for_cef_rs = $waiting
 }
 
 if (-not $SelectOnly -and ($update -or $Version)) {
@@ -94,7 +113,10 @@ if (-not $SelectOnly -and ($update -or $Version)) {
     Assert-Sha 'depot_tools commit' $checkouts.depot_tools_checkout
     Assert-Sha 'automate-git.py blob' $automate
 
-    # cef_rs_commit and ironrdp_commit stay: a release on the same branch keeps the CEF API.
+    # cef_rs_commit moves to the cef-rs release for this CEF version; ironrdp_commit
+    # stays, because it is where the patches come from.
+    Assert-Sha 'cef-rs commit' $cefRs
+    $pins.cef_rs_commit = $cefRs
     $pins.cef_commit = $commit
     $pins.cef_version = $selected.CefVersion
     $pins.chromium_tag = $tag
@@ -110,7 +132,7 @@ if (-not $SelectOnly -and ($update -or $Version)) {
 }
 
 if ($env:GITHUB_OUTPUT) {
-    foreach ($key in 'pinned', 'selected', 'selected_cef_version', 'new_major') {
+    foreach ($key in 'pinned', 'selected', 'selected_cef_version', 'new_major', 'waiting_for_cef_rs') {
         Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "$key=$($result[$key])"
     }
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "update=$("$update".ToLowerInvariant())"

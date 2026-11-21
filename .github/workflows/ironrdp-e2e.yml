@@ -21,15 +21,6 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Read pins
-        id: pins
-        shell: pwsh
-        run: |
-          $pins = Get-Content -Raw pins.json | ConvertFrom-Json
-          # The IronRDP revision whose suites gate releases; not a build pin.
-          $tests = Get-Content -Raw ironrdp-tests.json | ConvertFrom-Json
-          "ironrdp=$($tests.ironrdp_commit)" >> $env:GITHUB_OUTPUT
-          "cef_rs=$($pins.cef_rs_commit)" >> $env:GITHUB_OUTPUT
       - name: Download the Windows x64 candidate
         shell: pwsh
         env:
@@ -41,6 +32,22 @@ jobs:
             if ($LASTEXITCODE -eq 0) { Write-Host "Testing the Windows x64 candidate from run $run"; exit 0 }
           }
           throw 'None of the runs has a Windows x64 candidate'
+      - name: Find the IronRDP and cef-rs revisions to test with
+        id: pins
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . ./scripts/candidate.ps1
+          # The IronRDP revision whose suites gate releases; not a build pin.
+          $tests = Get-Content -Raw ironrdp-tests.json | ConvertFrom-Json
+          # The cef-rs release for the candidate's CEF version, which IronRDP needs to use it.
+          $version = (Get-Content -Raw candidate/manifest.json | ConvertFrom-Json).pins.cef_version.Split('+')[0]
+          $cefRs = Get-CefRsCommit $version
+          if (-not $cefRs) { throw "cef-rs has no release for CEF $version yet, so IronRDP cannot use this candidate" }
+          Write-Host "CEF ${version}: cef-rs $cefRs, IronRDP tests $($tests.ironrdp_commit)"
+          "ironrdp=$($tests.ironrdp_commit)" >> $env:GITHUB_OUTPUT
+          "cef_rs=$cefRs" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: Devolutions/IronRDP
@@ -53,7 +60,7 @@ jobs:
           ref: ${{ steps.pins.outputs.cef_rs }}
           path: cef-rs
           persist-credentials: false
-      - name: Export the candidate with the pinned cef-rs exporter
+      - name: Export the candidate with that cef-rs exporter
         shell: pwsh
         run: |
           $archive = Get-ChildItem candidate -Filter '*.tar.bz2' | Select-Object -First 1
@@ -70,7 +77,9 @@ jobs:
           Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP -ErrorAction SilentlyContinue
       - name: Build IronRDP against it and run the browser suites
         shell: pwsh
-        run: ./scripts/ironrdp-e2e.ps1 -IronRdp ironrdp -Cef "$env:RUNNER_TEMP\cef" -Artifacts "$env:RUNNER_TEMP\e2e"
+        run: |
+          ./scripts/ironrdp-e2e.ps1 -IronRdp ironrdp -Cef "$env:RUNNER_TEMP\cef" -Artifacts "$env:RUNNER_TEMP\e2e" `
+            -CefRs '${{ steps.pins.outputs.cef_rs }}'
       - name: Upload logs and reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
