@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows) { throw 'The IronRDP e2e gate runs on Windows x64' }
+# pwsh -File passes "a,b" as one string.
+$Suites = @($Suites | ForEach-Object { $_ -split ',' } | ForEach-Object Trim | Where-Object { $_ })
 # cef-dll-sys builds CEF's C++ wrapper with CMake and MSVC.
 if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -71,10 +73,14 @@ try {
     # A suite gets a second run: some IronRDP suites have timing races on slow
     # hosted runners that have nothing to do with the patches. A suite that fails
     # twice fails the gate, and both attempts' logs and reports are kept.
+    $unknown = @($Suites | Where-Object { $_ -notin $all.Keys })
+    if ($unknown) { throw "Unknown suites: $($unknown -join ', ') (known: $($all.Keys -join ', '))" }
     $failed = @()
     $retried = @()
+    $ran = 0
     foreach ($name in $all.Keys) {
         if ($Suites -and $name -notin $Suites) { continue }
+        $ran++
         $passed = $false
         foreach ($attempt in 1, 2) {
             $label = if ($attempt -eq 1) { $name } else { "$name-retry" }
@@ -86,7 +92,8 @@ try {
     }
     if ($retried) { Write-Host "Passed on the second attempt: $($retried -join ', ')" }
     if ($failed) { throw "IronRDP e2e suites failed twice: $($failed -join ', ')" }
-    Write-Host 'All IronRDP e2e suites passed against the candidate.'
+    if ($ran -eq 0) { throw 'No IronRDP e2e suite ran' }
+    Write-Host "All $ran IronRDP e2e suites passed against the candidate."
 } finally {
     Pop-Location
 }
