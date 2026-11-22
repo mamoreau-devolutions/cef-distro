@@ -55,9 +55,9 @@ Dispatch **Build patched CEF** (`build.yml`) on `master`. Inputs:
   deferred, not removed; leave this unset to build macOS again.
 - `publish`: create one release when every requested target succeeds.
 - `stage-minutes`: build time per stage (default 280; lower only to test
-  resumption). macOS stages build at most 190 minutes, because hosted macOS
-  runners have started losing files and dropping off about four hours into a
-  job, well inside the six-hour job limit.
+  resumption). macOS stages build at most 165 minutes, because hosted macOS
+  runners start failing file I/O and crashing from about 3h15m into a job,
+  well inside the six-hour job limit; such a stage ends by about three hours.
 - `resume-run`: an earlier run ID; a target whose run has saved no tree yet
   restores that run's newest saved tree instead of syncing (use after a run
   ends without a candidate). A finished build whose distribution step fails
@@ -88,7 +88,7 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    `tree.sha256` and decodes the stored parts, packing once more if they are
    corrupt; restoring checks those hashes before extracting anything.
    Each stage restores the newest tree its run has saved, so when a stage fails
-   or its runner is lost, the next stage retries from the last good tree. Two
+   or its runner is lost, the next stage retries from the last good tree. Three
    failed stages in a row stop the target. A retried target's job still shows
    the failed stage, so the release job runs unless the run was cancelled and
    publishes only when every target has a candidate.

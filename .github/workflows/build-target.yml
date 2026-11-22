@@ -33,7 +33,7 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s2:
     name: stage 2
-    needs: s1
+    needs: [s1]
     if: ${{ !cancelled() && needs.s1.result != 'skipped' && needs.s1.outputs.complete != 'true' }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
@@ -51,7 +51,7 @@ jobs:
   s3:
     name: stage 3
     needs: [s2, s1]
-    if: ${{ !cancelled() && needs.s2.result != 'skipped' && needs.s2.outputs.complete != 'true' && (needs.s2.result == 'success' || needs.s1.result == 'success') }}
+    if: ${{ !cancelled() && needs.s2.result != 'skipped' && needs.s2.outputs.complete != 'true' }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -67,8 +67,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s4:
     name: stage 4
-    needs: [s3, s2]
-    if: ${{ !cancelled() && needs.s3.result != 'skipped' && needs.s3.outputs.complete != 'true' && (needs.s3.result == 'success' || needs.s2.result == 'success') }}
+    needs: [s3, s2, s1]
+    if: ${{ !cancelled() && needs.s3.result != 'skipped' && needs.s3.outputs.complete != 'true' && (needs.s3.result == 'success' || needs.s2.result == 'success' || needs.s1.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -84,8 +84,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s5:
     name: stage 5
-    needs: [s4, s3]
-    if: ${{ !cancelled() && needs.s4.result != 'skipped' && needs.s4.outputs.complete != 'true' && (needs.s4.result == 'success' || needs.s3.result == 'success') }}
+    needs: [s4, s3, s2]
+    if: ${{ !cancelled() && needs.s4.result != 'skipped' && needs.s4.outputs.complete != 'true' && (needs.s4.result == 'success' || needs.s3.result == 'success' || needs.s2.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -101,8 +101,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s6:
     name: stage 6
-    needs: [s5, s4]
-    if: ${{ !cancelled() && needs.s5.result != 'skipped' && needs.s5.outputs.complete != 'true' && (needs.s5.result == 'success' || needs.s4.result == 'success') }}
+    needs: [s5, s4, s3]
+    if: ${{ !cancelled() && needs.s5.result != 'skipped' && needs.s5.outputs.complete != 'true' && (needs.s5.result == 'success' || needs.s4.result == 'success' || needs.s3.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -118,8 +118,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s7:
     name: stage 7
-    needs: [s6, s5]
-    if: ${{ !cancelled() && needs.s6.result != 'skipped' && needs.s6.outputs.complete != 'true' && (needs.s6.result == 'success' || needs.s5.result == 'success') }}
+    needs: [s6, s5, s4]
+    if: ${{ !cancelled() && needs.s6.result != 'skipped' && needs.s6.outputs.complete != 'true' && (needs.s6.result == 'success' || needs.s5.result == 'success' || needs.s4.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -135,8 +135,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s8:
     name: stage 8
-    needs: [s7, s6]
-    if: ${{ !cancelled() && needs.s7.result != 'skipped' && needs.s7.outputs.complete != 'true' && (needs.s7.result == 'success' || needs.s6.result == 'success') }}
+    needs: [s7, s6, s5]
+    if: ${{ !cancelled() && needs.s7.result != 'skipped' && needs.s7.outputs.complete != 'true' && (needs.s7.result == 'success' || needs.s6.result == 'success' || needs.s5.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -152,8 +152,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s9:
     name: stage 9
-    needs: [s8, s7]
-    if: ${{ !cancelled() && needs.s8.result != 'skipped' && needs.s8.outputs.complete != 'true' && (needs.s8.result == 'success' || needs.s7.result == 'success') }}
+    needs: [s8, s7, s6]
+    if: ${{ !cancelled() && needs.s8.result != 'skipped' && needs.s8.outputs.complete != 'true' && (needs.s8.result == 'success' || needs.s7.result == 'success' || needs.s6.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -169,8 +169,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s10:
     name: stage 10
-    needs: [s9, s8]
-    if: ${{ !cancelled() && needs.s9.result != 'skipped' && needs.s9.outputs.complete != 'true' && (needs.s9.result == 'success' || needs.s8.result == 'success') }}
+    needs: [s9, s8, s7]
+    if: ${{ !cancelled() && needs.s9.result != 'skipped' && needs.s9.outputs.complete != 'true' && (needs.s9.result == 'success' || needs.s8.result == 'success' || needs.s7.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -186,8 +186,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s11:
     name: stage 11
-    needs: [s10, s9]
-    if: ${{ !cancelled() && needs.s10.result != 'skipped' && needs.s10.outputs.complete != 'true' && (needs.s10.result == 'success' || needs.s9.result == 'success') }}
+    needs: [s10, s9, s8]
+    if: ${{ !cancelled() && needs.s10.result != 'skipped' && needs.s10.outputs.complete != 'true' && (needs.s10.result == 'success' || needs.s9.result == 'success' || needs.s8.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -203,8 +203,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s12:
     name: stage 12
-    needs: [s11, s10]
-    if: ${{ !cancelled() && needs.s11.result != 'skipped' && needs.s11.outputs.complete != 'true' && (needs.s11.result == 'success' || needs.s10.result == 'success') }}
+    needs: [s11, s10, s9]
+    if: ${{ !cancelled() && needs.s11.result != 'skipped' && needs.s11.outputs.complete != 'true' && (needs.s11.result == 'success' || needs.s10.result == 'success' || needs.s9.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -220,8 +220,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s13:
     name: stage 13
-    needs: [s12, s11]
-    if: ${{ !cancelled() && needs.s12.result != 'skipped' && needs.s12.outputs.complete != 'true' && (needs.s12.result == 'success' || needs.s11.result == 'success') }}
+    needs: [s12, s11, s10]
+    if: ${{ !cancelled() && needs.s12.result != 'skipped' && needs.s12.outputs.complete != 'true' && (needs.s12.result == 'success' || needs.s11.result == 'success' || needs.s10.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -237,8 +237,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s14:
     name: stage 14
-    needs: [s13, s12]
-    if: ${{ !cancelled() && needs.s13.result != 'skipped' && needs.s13.outputs.complete != 'true' && (needs.s13.result == 'success' || needs.s12.result == 'success') }}
+    needs: [s13, s12, s11]
+    if: ${{ !cancelled() && needs.s13.result != 'skipped' && needs.s13.outputs.complete != 'true' && (needs.s13.result == 'success' || needs.s12.result == 'success' || needs.s11.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -254,8 +254,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s15:
     name: stage 15
-    needs: [s14, s13]
-    if: ${{ !cancelled() && needs.s14.result != 'skipped' && needs.s14.outputs.complete != 'true' && (needs.s14.result == 'success' || needs.s13.result == 'success') }}
+    needs: [s14, s13, s12]
+    if: ${{ !cancelled() && needs.s14.result != 'skipped' && needs.s14.outputs.complete != 'true' && (needs.s14.result == 'success' || needs.s13.result == 'success' || needs.s12.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:
@@ -271,8 +271,8 @@ jobs:
           resume-run: ${{ inputs.resume-run }}
   s16:
     name: stage 16
-    needs: [s15, s14]
-    if: ${{ !cancelled() && needs.s15.result != 'skipped' && needs.s15.outputs.complete != 'true' && (needs.s15.result == 'success' || needs.s14.result == 'success') }}
+    needs: [s15, s14, s13]
+    if: ${{ !cancelled() && needs.s15.result != 'skipped' && needs.s15.outputs.complete != 'true' && (needs.s15.result == 'success' || needs.s14.result == 'success' || needs.s13.result == 'success') }}
     runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
     timeout-minutes: 355
     outputs:

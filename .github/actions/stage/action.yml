@@ -33,13 +33,12 @@ runs:
         BUDGET: ${{ inputs.budget-minutes }}
       run: |
         set -euo pipefail
-        # Hosted macOS runners start losing files (the runner's own node, then
-        # the tree being saved) and drop off around four hours into a job.
-        # Stop early enough that the restore, build, save and upload all end
-        # well before that.
-        if [ "$RUNNER_OS" = macOS ] && [ "$BUDGET" -gt 190 ]; then
-          echo "Capping the macOS build budget at 190 of $BUDGET minutes"
-          BUDGET=190
+        # Hosted macOS runners start failing file I/O (EILSEQ, lost files, then
+        # the runner itself crashes) from about 3h15m into a job. Stop early
+        # enough that the restore, build, save and upload all end by about 3h.
+        if [ "$RUNNER_OS" = macOS ] && [ "$BUDGET" -gt 165 ]; then
+          echo "Capping the macOS build budget at 165 of $BUDGET minutes"
+          BUDGET=165
         fi
         echo "CEF_DEADLINE=$(( $(date +%s) + BUDGET * 60 ))" >> "$GITHUB_ENV"
         # Every stage must use the same absolute tree path so ninja state stays valid.

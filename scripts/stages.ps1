@@ -27,17 +27,18 @@ $lines.AddRange([string[]]@(
 foreach ($stage in 1..16) {
     $lines.Add("  s${stage}:")
     $lines.Add("    name: stage $stage")
-    # A stage continues an unfinished build, or retries once after a stage that
+    # A stage continues an unfinished build, or retries after a stage that
     # failed (including a lost runner) by restoring the newest tree the run saved;
-    # two failures in a row stop the chain.
-    if ($stage -eq 2) {
-        $lines.Add('    needs: s1')
-        $lines.Add("    if: `${{ !cancelled() && needs.s1.result != 'skipped' && needs.s1.outputs.complete != 'true' }}")
-    } elseif ($stage -gt 2) {
-        $previous = $stage - 1
-        $before = $stage - 2
-        $lines.Add("    needs: [s$previous, s$before]")
-        $lines.Add("    if: `${{ !cancelled() && needs.s$previous.result != 'skipped' && needs.s$previous.outputs.complete != 'true' && (needs.s$previous.result == 'success' || needs.s$before.result == 'success') }}")
+    # three failures in a row stop the chain.
+    if ($stage -gt 1) {
+        $earlier = @(($stage - 1)..([Math]::Max(1, $stage - 3)) | ForEach-Object { "s$_" })
+        $previous = $earlier[0]
+        $condition = "!cancelled() && needs.$previous.result != 'skipped' && needs.$previous.outputs.complete != 'true'"
+        if ($earlier.Count -eq 3) {
+            $condition += ' && (' + (($earlier | ForEach-Object { "needs.$_.result == 'success'" }) -join ' || ') + ')'
+        }
+        $lines.Add("    needs: [$($earlier -join ', ')]")
+        $lines.Add("    if: `${{ $condition }}")
     }
     $lines.AddRange([string[]]@(
         "    runs-on: `${{ fromJSON('$runners')[inputs.target] }}",
