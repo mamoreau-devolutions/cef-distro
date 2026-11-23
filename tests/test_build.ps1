@@ -2,6 +2,14 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $buildScript = Join-Path $repo 'scripts' 'build.ps1'
 . (Join-Path $repo 'scripts' 'build-env.ps1')
+foreach ($target in @('linux-x64', 'linux-arm64', 'windows-x64', 'windows-arm64', 'macos-x64', 'macos-arm64')) {
+    $defines = Get-CefGnDefines $target
+    if ($defines -cnotcontains 'is_official_build=true') { throw "$target is not an official build" }
+    $withoutSnapshot = $defines -ccontains 'use_v8_context_snapshot=false'
+    if ($withoutSnapshot -ne ($target -eq 'macos-x64')) {
+        throw "$target has the wrong V8 context snapshot setting: $($defines -join ' ')"
+    }
+}
 $previousJobs = $env:CEF_NINJA_JOBS
 try {
     $env:CEF_NINJA_JOBS = $null

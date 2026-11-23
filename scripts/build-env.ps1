@@ -1,3 +1,22 @@
+# GN arguments for one target, apart from what CEF's own tooling adds.
+function Get-CefGnDefines([string]$Target) {
+    $platform, $arch = $Target.Split('-')
+    $gn = @('is_official_build=true', 'use_thin_lto=false', 'chrome_pgo_phase=0', 'symbol_level=0', 'use_siso=false')
+    if ($platform -eq 'linux') {
+        $gn += 'use_sysroot=true', 'is_cfi=false'
+    }
+    if ($Target -eq 'macos-x64') {
+        # macOS x64 is cross-compiled on an arm64 runner. The V8 context
+        # snapshot is made by a host program that links all of Blink, so the
+        # cross build compiles Blink and its dependencies a second time for
+        # the arm64 host: about 29k of its 95k ninja steps. Without it, V8
+        # starts from snapshot_blob.bin, which CEF ships in the framework in
+        # its place, and new contexts take slightly longer to create.
+        $gn += 'use_v8_context_snapshot=false'
+    }
+    return $gn
+}
+
 function Set-CefBuildEnvironment([string]$Directory, [string]$Target) {
     if ($Target -cnotin @('linux-x64', 'linux-arm64', 'windows-x64', 'windows-arm64', 'macos-x64', 'macos-arm64')) {
         throw "Unsupported target: $Target"
@@ -12,9 +31,8 @@ function Set-CefBuildEnvironment([string]$Directory, [string]$Target) {
     $env:GN_OUT_CONFIGS = "Release_GN_$arch"
     $env:CEF_ARCHIVE_FORMAT = 'tar.bz2'
     $env:DEPOT_TOOLS_UPDATE = '0'
-    $gn = @('is_official_build=true', 'use_thin_lto=false', 'chrome_pgo_phase=0', 'symbol_level=0', 'use_siso=false')
+    $gn = Get-CefGnDefines $Target
     if ($platform -eq 'linux') {
-        $gn += 'use_sysroot=true', 'is_cfi=false'
         if ($arch -eq 'arm64') { $env:CEF_INSTALL_SYSROOT = 'arm64' }
     } else {
         if ($platform -eq 'windows') { $env:DEPOT_TOOLS_WIN_TOOLCHAIN = '0' }
