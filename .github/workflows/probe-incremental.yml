@@ -1,0 +1,186 @@
+name: Probe incremental update
+# Restores a tree saved by an earlier version's build, moves its checkouts to
+# the versions in pins.json in place, and counts what ninja would rebuild. Each
+# patched file whose content does not change keeps its old mtime, as an
+# incremental build would have to arrange. Nothing is built or uploaded except
+# the probe's records.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target of the saved tree
+        required: true
+        type: choice
+        options: [linux-x64, linux-arm64, windows-x64, windows-arm64, macos-x64, macos-arm64]
+      run:
+        description: Build run that saved the tree
+        required: true
+        type: string
+      artifact:
+        description: Exact tree artifact name, such as tree-macos-x64-1
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: ${{ fromJSON('{"linux-x64":"ubuntu-24.04","linux-arm64":"ubuntu-24.04","windows-x64":"windows-2025","windows-arm64":"windows-2025","macos-x64":"macos-26","macos-arm64":"macos-26"}')[inputs.target] }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Record paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The same absolute tree path as the build stages, so ninja state stays valid.
+          case "$RUNNER_OS" in
+            Linux) tree=/home/runner/cefb; parts=/mnt/cef-parts ;;
+            macOS) tree=/Users/runner/cefb; parts=/Users/runner/cef-parts ;;
+            Windows) tree=D:/cefb; parts=D:/cef-parts ;;
+          esac
+          echo "CEF_TREE=$tree" >> "$GITHUB_ENV"
+          echo "CEF_PARTS=$parts" >> "$GITHUB_ENV"
+          echo "PROBE=$RUNNER_TEMP/probe" >> "$GITHUB_ENV"
+
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift \
+            /usr/local/lib/node_modules /opt/google
+          sudo docker image prune --all --force >/dev/null || true
+          sudo mkdir -p /mnt/cef-parts
+          sudo chown "$(id -u):$(id -g)" /mnt/cef-parts
+
+      - name: Select Xcode (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode=$(ls -d /Applications/Xcode_26.*.app | sort -V | tail -1)
+          sudo xcode-select --switch "$(cd -P "$xcode" && pwd)"
+          xcrun --find metal >/dev/null 2>&1 && xcrun metal --version >/dev/null 2>&1 || \
+            xcodebuild -downloadComponent MetalToolchain
+
+      - name: Prepare Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath 'D:\' -ErrorAction SilentlyContinue
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+          git config --global core.longpaths true
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download saved tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          run-id: ${{ inputs.run }}
+          github-token: ${{ github.token }}
+          path: ${{ env.CEF_PARTS }}/in
+
+      - name: Restore saved tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          pwsh -NoProfile -File scripts/tree.ps1 -Mode unpack -Parts "$CEF_PARTS/in" -Directory "$CEF_TREE"
+          rm -rf "$CEF_PARTS/in"
+          df -h "$CEF_TREE"
+
+      - name: Update the tree in place and count what ninja would rebuild
+        shell: pwsh
+        env:
+          TARGET: ${{ inputs.target }}
+          SOURCE_RUN: ${{ inputs.run }}
+          SOURCE_ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          . ./scripts/candidate.ps1
+          . ./scripts/build-env.ps1
+          $tree = $env:CEF_TREE
+          Set-CefBuildEnvironment $tree $env:TARGET
+          $probe = @('scripts/incremental-probe.py', '--tree', $tree, '--target', $env:TARGET, '--state', $env:PROBE)
+          $chromium = Join-Path $tree 'chromium'
+          $src = Join-Path $chromium 'src'
+          $cef = Join-Path $src 'cef'
+          function Step([string]$Name, [scriptblock]$Action) {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            Write-Host "::group::$Name"
+            try { & $Action } finally { Write-Host '::endgroup::'; Write-Host ("{0}: {1:N1} min" -f $Name, $watch.Elapsed.TotalMinutes) }
+          }
+
+          Step 'Count steps pending in the saved tree' { python $probe[0] baseline @($probe[1..6]) }
+          Write-Host "Saved tree: CEF $(git -C $cef rev-parse HEAD), Chromium $(git -C $src rev-parse HEAD)"
+          Step 'Record and revert local changes' { python $probe[0] revert @($probe[1..6]) }
+          Step 'Move CEF' {
+            git -C $cef fetch --quiet origin
+            git -C $cef checkout --quiet $CefPins.cef_commit
+          }
+          Step 'Move Chromium and its dependencies' {
+            $gclient = Join-Path $chromium '.gclient'
+            $spec = Get-Content -Raw $gclient
+            $updated = $spec -replace '(chromium/src\.git@)[0-9.]+', "`${1}$($CefPins.chromium_tag)"
+            if ($updated -ceq $spec) { throw "No Chromium version found in .gclient: $spec" }
+            Set-Content -NoNewline -LiteralPath $gclient -Value $updated
+            Push-Location $chromium
+            try { gclient sync --nohooks --no-history } finally { Pop-Location }
+            $head = git -C $src rev-parse HEAD
+            if ($head -cne $CefPins.chromium_commit) { throw "Chromium is at $head, not $($CefPins.chromium_commit)" }
+          }
+          Step 'Run hooks' {
+            Push-Location $src
+            try {
+              python (Join-Path $cef 'tools' 'patcher.py') --patch-file (Join-Path $cef 'patch' 'patches' 'runhooks') --patch-dir $src
+              Push-Location $chromium
+              try { gclient runhooks } finally { Pop-Location }
+            } finally { Pop-Location }
+          }
+          Step 'Apply patches' {
+            Push-Location $cef
+            try { python tools/patch_updater.py } finally { Pop-Location }
+            $trees = @(
+              @{ Path = $cef; Patches = @('isolated-clipboard.patch', 'remote-devices-cef.patch') }
+              @{ Path = $src; Patches = @('remote-devices-chromium.patch', 'in-process-audio-shutdown.patch') }
+            )
+            if (-not $IsWindows) { $trees[1].Patches += 'disable-chromium-shutdown-signals.patch' }
+            foreach ($patchTree in $trees) {
+              foreach ($name in $patchTree.Patches) { git -C $patchTree.Path apply (Join-Path $CefRoot 'patches' $name) }
+            }
+          }
+          Step 'Restore mtimes of unchanged files' { python $probe[0] restore @($probe[1..6]) }
+          Step 'Generate build files' {
+            Push-Location $cef
+            try { python tools/gclient_hook.py } finally { Pop-Location }
+          }
+          Step 'Count steps after the update' { python $probe[0] count @($probe[1..6]) }
+          $summary = Get-Content -Raw (Join-Path $env:PROBE 'summary.json') | ConvertFrom-Json
+          @(
+            "### Incremental update probe: $env:TARGET"
+            ''
+            "From ``$env:SOURCE_ARTIFACT`` of run $env:SOURCE_RUN to CEF $($CefPins.cef_version)."
+            ''
+            "| Steps | Count |"
+            "|---|---|"
+            "| Pending in the saved tree | $($summary.pending_before_update) |"
+            "| Pending after the update | $($summary.pending_after_update) |"
+            "| Added by the update | $($summary.added_by_update) |"
+          ) | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload probe records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: incremental-probe-${{ inputs.target }}
+          path: ${{ env.PROBE }}/*
+          if-no-files-found: warn
+          retention-days: 14
