@@ -20,6 +20,14 @@ on:
         description: Exact tree artifact name, such as tree-macos-x64-1
         required: true
         type: string
+      salt:
+        description: >-
+          Mojom message ID salt: version keeps the default (chrome/VERSION); fixed
+          reads it from a file that keeps the saved tree's VERSION text
+        required: false
+        default: version
+        type: choice
+        options: [version, fixed]
 permissions:
   contents: read
   actions: read
@@ -102,6 +110,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           SOURCE_RUN: ${{ inputs.run }}
           SOURCE_ARTIFACT: ${{ inputs.artifact }}
+          PROBE_SALT: ${{ inputs.salt }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
@@ -126,6 +135,10 @@ jobs:
           Step 'Count steps pending in the saved tree' { Probe baseline }
           Write-Host "Saved tree: CEF $(git -C $cef rev-parse HEAD), Chromium $(git -C $src rev-parse HEAD)"
           Step 'Record and revert local changes' { Probe revert }
+          # The saved outputs were generated with this VERSION text as the salt.
+          $versionFile = Get-Item (Join-Path $src 'chrome' 'VERSION')
+          $savedVersion = [IO.File]::ReadAllBytes($versionFile.FullName)
+          $savedVersionTime = $versionFile.LastWriteTimeUtc
           Step 'Move CEF' {
             git -C $cef fetch --quiet origin
             git -C $cef checkout --quiet $CefPins.cef_commit
@@ -191,19 +204,30 @@ jobs:
             }
           }
           Step 'Restore mtimes of unchanged files' { Probe restore }
+          if ($env:PROBE_SALT -eq 'fixed') {
+            # As if the saved tree had been built with a fixed salt file all along:
+            # same text and mtime as the VERSION it was salted with.
+            $salt = Join-Path $src 'build' 'mojom_message_id_salt'
+            [IO.File]::WriteAllBytes($salt, $savedVersion)
+            (Get-Item $salt).LastWriteTimeUtc = $savedVersionTime
+            $env:GN_DEFINES += ' mojom_message_id_salt_path="//build/mojom_message_id_salt"'
+          }
+          Write-Host "GN_DEFINES: $env:GN_DEFINES"
           Step 'Generate build files' {
             Push-Location $cef
             try { python tools/gclient_hook.py } finally { Pop-Location }
           }
+          Step 'Run the mojom generators' { Probe generate }
           Step 'Count steps after the update' { Probe count }
           $summary = Get-Content -Raw (Join-Path $env:PROBE 'summary.json') | ConvertFrom-Json
           @(
             "### Incremental update probe: $target"
             ''
-            "From ``$env:SOURCE_ARTIFACT`` of run $env:SOURCE_RUN to CEF $($CefPins.cef_version)."
+            "From ``$env:SOURCE_ARTIFACT`` of run $env:SOURCE_RUN to CEF $($CefPins.cef_version), mojom salt: $env:PROBE_SALT."
             ''
             "| Steps | Count |"
             "|---|---|"
+            "| Mojom generation steps run | $($summary.mojom_steps_run) |"
             "| Pending in the saved tree | $($summary.pending_before_update) |"
             "| Pending after the update | $($summary.pending_after_update) |"
             "| Added by the update | $($summary.added_by_update) |"
@@ -213,7 +237,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: incremental-probe-${{ inputs.target }}
+          name: incremental-probe-${{ inputs.target }}-${{ inputs.salt }}
           path: ${{ env.PROBE }}/*
           if-no-files-found: warn
           retention-days: 14

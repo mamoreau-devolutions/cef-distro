@@ -70,16 +70,25 @@ def changes(repo):
         yield status, path
 
 
-def ninja(tree, target, explain):
-    platform, arch = target.split("-")
-    src = os.path.join(tree, "chromium", "src")
-    binary = os.path.join(src, "third_party", "ninja", "ninja.exe" if platform == "windows" else "ninja")
-    targets = {
-        "linux": ["cefsimple", "chrome_sandbox"],
-        "windows": ["cefclient", "bootstrap", "bootstrapc"],
-        "macos": ["cefclient"],
-    }[platform]
-    command = [binary, "-C", os.path.join(src, "out", f"Release_GN_{arch}"), "-n"]
+def out_dir(tree, target):
+    arch = target.split("-")[1]
+    return os.path.join(tree, "chromium", "src", "out", f"Release_GN_{arch}")
+
+
+def ninja_binary(tree, target):
+    name = "ninja.exe" if target.startswith("windows") else "ninja"
+    return os.path.join(tree, "chromium", "src", "third_party", "ninja", name)
+
+
+def ninja(tree, target, explain, targets=None):
+    platform = target.split("-")[0]
+    if targets is None:
+        targets = {
+            "linux": ["cefsimple", "chrome_sandbox"],
+            "windows": ["cefclient", "bootstrap", "bootstrapc"],
+            "macos": ["cefclient"],
+        }[platform]
+    command = [ninja_binary(tree, target), "-C", out_dir(tree, target), "-n"]
     if explain:
         command += ["-d", "explain"]
     process = subprocess.run(command + targets, capture_output=True, text=True, errors="replace")
@@ -88,6 +97,39 @@ def ninja(tree, target, explain):
         raise SystemExit(f"ninja -n failed: {process.returncode}")
     steps = [match.group(1) for match in map(STEP.match, process.stdout.splitlines()) if match]
     return steps, process.stdout.splitlines() + process.stderr.splitlines()
+
+
+MOJOM_TOOLS = ("mojom_bindings_generator.py", "mojom_parser.py")
+GENERATION_KINDS = {"ACTION", "STAMP", "COPY"}
+
+
+def mojom_outputs(out):
+    """First output of every build edge whose rule runs a mojom tool."""
+    outputs = []
+    for directory, _, names in os.walk(out):
+        for name in names:
+            if not name.endswith(".ninja"):
+                continue
+            rules, rule = set(), None
+            with open(os.path.join(directory, name), encoding="utf-8", errors="replace") as stream:
+                lines = stream.read().splitlines()
+            for line in lines:
+                if line.startswith("rule "):
+                    rule = line[5:].strip()
+                elif rule and line.startswith("  command = ") and any(tool in line for tool in MOJOM_TOOLS):
+                    rules.add(rule)
+                elif not line.startswith("  "):
+                    rule = None
+            for line in lines:
+                if not line.startswith("build "):
+                    continue
+                # Outputs end at the first unescaped colon; "$ " and "$:" are escapes.
+                head = re.split(r"(?<!\$):", line[6:], maxsplit=1)
+                rule_used = head[1].split(None, 1)[0] if len(head) == 2 and head[1].strip() else None
+                if rule_used in rules:
+                    first = re.split(r"(?<!\$) ", head[0].strip(), maxsplit=1)[0]
+                    outputs.append(first.replace("$ ", " ").replace("$:", ":").replace("$$", "$"))
+    return outputs
 
 
 def kind(description):
@@ -107,7 +149,7 @@ def toolchain(description):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=["baseline", "revert", "restore", "count"])
+    parser.add_argument("phase", choices=["baseline", "revert", "restore", "generate", "count"])
     parser.add_argument("--tree", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--state", required=True, help="Directory for the probe's records")
@@ -160,6 +202,26 @@ def main():
         print(f"Recorded files: {restored} unchanged (old mtime restored), {changed} changed, {gone} gone")
         return
 
+    if args.phase == "generate":
+        # Running the mojom generators for real lets restat drop every dependent of
+        # an output whose content did not change, which a dry run cannot see.
+        outputs = mojom_outputs(out_dir(args.tree, args.target))
+        batches = [outputs[start:start + 1500] for start in range(0, len(outputs), 1500)]
+        planned = collections.Counter()
+        for batch in batches:
+            steps, _ = ninja(args.tree, args.target, explain=False, targets=batch)
+            planned.update(map(kind, steps))
+        print(f"Mojom edges: {len(outputs)}; steps to run them: {planned.most_common()}")
+        other = {name: count for name, count in planned.items() if name not in GENERATION_KINDS}
+        if other:
+            raise SystemExit(f"Running the mojom generators would also build {other}")
+        for batch in batches:
+            command = [ninja_binary(args.tree, args.target), "-C", out_dir(args.tree, args.target), *batch]
+            subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+        with open(os.path.join(args.state, "generated.json"), "w", encoding="utf-8") as out:
+            json.dump({"mojom_edges": len(outputs), "steps_run": sum(planned.values())}, out)
+        return
+
     with open(os.path.join(args.state, "baseline.json"), encoding="utf-8") as stream:
         baseline = set(json.load(stream))
     steps, lines = ninja(args.tree, args.target, explain=True)
@@ -176,8 +238,15 @@ def main():
             reasons["command line changed"] += 1
         elif MISSING.match(line):
             reasons["output missing"] += 1
+    generated_path = os.path.join(args.state, "generated.json")
+    generated = {}
+    if os.path.exists(generated_path):
+        with open(generated_path, encoding="utf-8") as stream:
+            generated = json.load(stream)
     summary = {
         "target": args.target,
+        "mojom_salt": os.environ.get("PROBE_SALT", "version"),
+        "mojom_steps_run": generated.get("steps_run", 0),
         "pending_before_update": len(baseline),
         "pending_after_update": len(steps),
         "added_by_update": len(new),
