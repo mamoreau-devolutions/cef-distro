@@ -137,9 +137,15 @@ jobs:
             if ($updated -ceq $spec) { throw "No Chromium version found in .gclient: $spec" }
             Set-Content -NoNewline -LiteralPath $gclient -Value $updated
             Push-Location $chromium
-            try { gclient sync --nohooks --no-history } finally { Pop-Location }
+            try {
+              gclient sync --nohooks --no-history --verbose --revision "src@$($CefPins.chromium_commit)"
+            } finally { Pop-Location }
             $head = git -C $src rev-parse HEAD
             if ($head -cne $CefPins.chromium_commit) { throw "Chromium is at $head, not $($CefPins.chromium_commit)" }
+            # A dependency whose revision changed must have moved too.
+            $v8 = [regex]::Match((Get-Content -Raw (Join-Path $src 'DEPS')), "'v8_revision':\s*'([0-9a-f]{40})'").Groups[1].Value
+            $v8Head = git -C (Join-Path $src 'v8') rev-parse HEAD
+            if ($v8Head -cne $v8) { throw "V8 is at $v8Head, not $v8 from DEPS" }
           }
           Step 'Run hooks' {
             Push-Location $src
