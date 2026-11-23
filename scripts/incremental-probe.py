@@ -27,7 +27,8 @@ import subprocess
 import sys
 
 STEP = re.compile(r"^\[\d+/\d+\] (.*)$")
-OLDER = re.compile(r"^ninja explain: (?:output |restat of output )?(\S+) older than most recent input (\S+)")
+OLDER = re.compile(
+    r"^ninja explain: (?:output |restat of output |recorded mtime of )?(\S+) older than most recent input (\S+)")
 COMMAND = re.compile(r"^ninja explain: command line changed for (\S+)")
 MISSING = re.compile(r"^ninja explain: output (\S+) doesn't exist")
 
@@ -99,25 +100,28 @@ def ninja(tree, target, explain, targets=None):
     return steps, process.stdout.splitlines() + process.stderr.splitlines()
 
 
-MOJOM_TOOLS = ("mojom_bindings_generator.py", "mojom_parser.py")
 GENERATION_KINDS = {"ACTION", "STAMP", "COPY"}
+# An action that runs a binary from the build would need that binary built first.
+BUILT_BINARY = re.compile(r"(?:^|\s)(?:\./|clang_\w+/|\S*gn_run_binary\.py)")
 
 
-def mojom_outputs(out):
-    """First output of every build edge whose rule runs a mojom tool."""
-    outputs = []
+def script_action_outputs(out):
+    """Every output of a GN action whose command runs a script, not a built binary."""
+    outputs = set()
     for directory, _, names in os.walk(out):
         for name in names:
             if not name.endswith(".ninja"):
                 continue
-            rules, rule = set(), None
             with open(os.path.join(directory, name), encoding="utf-8", errors="replace") as stream:
                 lines = stream.read().splitlines()
+            # GN puts each target's rules in that target's file, scoped to it.
+            rules, rule = set(), None
             for line in lines:
                 if line.startswith("rule "):
                     rule = line[5:].strip()
-                elif rule and line.startswith("  command = ") and any(tool in line for tool in MOJOM_TOOLS):
-                    rules.add(rule)
+                elif rule and line.startswith("  command = "):
+                    if rule.startswith("__") and not BUILT_BINARY.search(line[12:]):
+                        rules.add(rule)
                 elif not line.startswith("  "):
                     rule = None
             for line in lines:
@@ -125,11 +129,36 @@ def mojom_outputs(out):
                     continue
                 # Outputs end at the first unescaped colon; "$ " and "$:" are escapes.
                 head = re.split(r"(?<!\$):", line[6:], maxsplit=1)
-                rule_used = head[1].split(None, 1)[0] if len(head) == 2 and head[1].strip() else None
-                if rule_used in rules:
-                    first = re.split(r"(?<!\$) ", head[0].strip(), maxsplit=1)[0]
-                    outputs.append(first.replace("$ ", " ").replace("$:", ":").replace("$$", "$"))
+                if len(head) != 2 or not head[1].strip() or head[1].split(None, 1)[0] not in rules:
+                    continue
+                for path in re.split(r"(?<!\$) +", head[0].strip()):
+                    if path and path != "|":
+                        outputs.add(path.replace("$ ", " ").replace("$:", ":").replace("$$", "$"))
     return outputs
+
+
+def directly_dirty(lines):
+    """Outputs that ninja finds dirty for a reason of their own, not a dirty input."""
+    dirty = set()
+    for line in lines:
+        for pattern in (OLDER, COMMAND, MISSING):
+            if match := pattern.match(line):
+                dirty.add(match.group(1))
+                break
+    return dirty
+
+
+def without_compiles(tree, target, outputs):
+    """The subset of |outputs| whose edges ninja can run without compiling anything."""
+    if not outputs:
+        return []
+    steps, _ = ninja(tree, target, explain=False, targets=outputs)
+    if all(kind(step) in GENERATION_KINDS for step in steps):
+        return outputs
+    if len(outputs) == 1:
+        return []
+    half = len(outputs) // 2
+    return without_compiles(tree, target, outputs[:half]) + without_compiles(tree, target, outputs[half:])
 
 
 def kind(description):
@@ -203,23 +232,39 @@ def main():
         return
 
     if args.phase == "generate":
-        # Running the mojom generators for real lets restat drop every dependent of
-        # an output whose content did not change, which a dry run cannot see.
-        outputs = mojom_outputs(out_dir(args.tree, args.target))
-        batches = [outputs[start:start + 1500] for start in range(0, len(outputs), 1500)]
-        planned = collections.Counter()
-        for batch in batches:
-            steps, _ = ninja(args.tree, args.target, explain=False, targets=batch)
-            planned.update(map(kind, steps))
-        print(f"Mojom edges: {len(outputs)}; steps to run them: {planned.most_common()}")
-        other = {name: count for name, count in planned.items() if name not in GENERATION_KINDS}
-        if other:
-            raise SystemExit(f"Running the mojom generators would also build {other}")
-        for batch in batches:
-            command = [ninja_binary(args.tree, args.target), "-C", out_dir(args.tree, args.target), *batch]
-            subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
-        with open(os.path.join(args.state, "generated.json"), "w", encoding="utf-8") as out:
-            json.dump({"mojom_edges": len(outputs), "steps_run": sum(planned.values())}, out)
+        # Running the dirty generators for real lets restat drop every dependent of
+        # an output whose content did not change, which a dry run cannot see. Each
+        # round runs what is dirty now; their outputs may dirty further generators.
+        out = out_dir(args.tree, args.target)
+        actions = script_action_outputs(out)
+        print(f"Outputs of script actions: {len(actions)}")
+        run, skipped, previous = collections.Counter(), set(), None
+        for round_number in range(1, 16):
+            _, lines = ninja(args.tree, args.target, explain=True)
+            dirty = sorted(directly_dirty(lines) & actions - skipped)
+            if not dirty or dirty == previous:
+                break
+            previous = dirty
+            runnable = []
+            for start in range(0, len(dirty), 1000):
+                runnable += without_compiles(args.tree, args.target, dirty[start:start + 1000])
+            skipped |= set(dirty) - set(runnable)
+            if not runnable:
+                break
+            for start in range(0, len(runnable), 1000):
+                batch = runnable[start:start + 1000]
+                steps, _ = ninja(args.tree, args.target, explain=False, targets=batch)
+                run.update(map(kind, steps))
+                command = [ninja_binary(args.tree, args.target), "-C", out, "-k", "0", *batch]
+                result = subprocess.run(command, stdout=subprocess.DEVNULL)
+                if result.returncode != 0:
+                    print(f"Some generators failed in round {round_number} (exit {result.returncode})")
+            print(f"Round {round_number}: {len(dirty)} dirty outputs, {len(runnable)} run, "
+                  f"{len(skipped)} skipped as they need compiles so far")
+        with open(os.path.join(args.state, "generated.json"), "w", encoding="utf-8") as out_file:
+            json.dump({"steps_run": sum(run.values()), "kinds": run.most_common(),
+                       "skipped": sorted(skipped)}, out_file, indent=1)
+        print(f"Generator steps run: {run.most_common()}; outputs skipped: {len(skipped)}")
         return
 
     with open(os.path.join(args.state, "baseline.json"), encoding="utf-8") as stream:
@@ -246,7 +291,8 @@ def main():
     summary = {
         "target": args.target,
         "mojom_salt": os.environ.get("PROBE_SALT", "version"),
-        "mojom_steps_run": generated.get("steps_run", 0),
+        "generator_steps_run": generated.get("steps_run", 0),
+        "generator_outputs_skipped": len(generated.get("skipped", [])),
         "pending_before_update": len(baseline),
         "pending_after_update": len(steps),
         "added_by_update": len(new),

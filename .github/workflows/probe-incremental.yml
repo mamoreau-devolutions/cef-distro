@@ -217,7 +217,7 @@ jobs:
             Push-Location $cef
             try { python tools/gclient_hook.py } finally { Pop-Location }
           }
-          Step 'Run the mojom generators' { Probe generate }
+          Step 'Run the dirty generators' { Probe generate }
           Step 'Count steps after the update' { Probe count }
           $summary = Get-Content -Raw (Join-Path $env:PROBE 'summary.json') | ConvertFrom-Json
           @(
@@ -227,7 +227,7 @@ jobs:
             ''
             "| Steps | Count |"
             "|---|---|"
-            "| Mojom generation steps run | $($summary.mojom_steps_run) |"
+            "| Generator steps run for real | $($summary.generator_steps_run) |"
             "| Pending in the saved tree | $($summary.pending_before_update) |"
             "| Pending after the update | $($summary.pending_after_update) |"
             "| Added by the update | $($summary.added_by_update) |"
