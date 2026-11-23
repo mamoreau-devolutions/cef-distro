@@ -114,11 +114,7 @@ Runners: `ubuntu-24.04` (arm64 is cross-compiled with CEF's sysroot),
 `windows-2025` (installs Windows SDK 10.0.28000 required by Chromium 156) and
 `macos-26` Apple Silicon for both macOS architectures (Xcode 26). The build is an official configuration
 without ThinLTO, PGO, CFI or symbols (`scripts/build-env.ps1`), which
-keeps links within hosted memory; no codec or branding flags are set. macOS x64
-also turns off the V8 context snapshot (`use_v8_context_snapshot=false`): its
-generator links all of Blink, which the arm64 runner would otherwise compile a
-second time for itself (about 30% of the x64 build), so V8 starts from
-`snapshot_blob.bin` instead. A full
+keeps links within hosted memory; no codec or branding flags are set. A full
 six-target build can take multiple days depending on runner performance. Tree
 artifacts (~13 GB per stage) are kept for 7 days and candidates for 14 days.
 The standard Apple Silicon runner has 7 GiB of RAM, below CEF's recommended
