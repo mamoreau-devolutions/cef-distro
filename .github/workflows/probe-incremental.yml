@@ -130,15 +130,38 @@ jobs:
             git -C $cef fetch --quiet origin
             git -C $cef checkout --quiet $CefPins.cef_commit
           }
+          # gclient fetches a checkout's whole history whenever its pinned revision is
+          # missing, which a shallow Chromium checkout cannot take, so each revision is
+          # fetched alone first and gclient finds them all present.
+          function Get-Shallow([string]$Repo, [string]$Revision) {
+            $PSNativeCommandUseErrorActionPreference = $false
+            $present = git -C $Repo cat-file -t "$Revision^{commit}" 2>$null
+            $PSNativeCommandUseErrorActionPreference = $true
+            if ($present -ne 'commit') {
+              git -C $Repo fetch --quiet --depth=1 --no-tags origin $Revision
+            }
+          }
           Step 'Move Chromium and its dependencies' {
             $gclient = Join-Path $chromium '.gclient'
             $spec = Get-Content -Raw $gclient
-            $updated = $spec -replace '(chromium/src\.git@)[0-9.]+', "`${1}$($CefPins.chromium_tag)"
+            $updated = $spec -replace '(chromium/src\.git@)[0-9a-f.]+', "`${1}$($CefPins.chromium_commit)"
             if ($updated -ceq $spec) { throw "No Chromium version found in .gclient: $spec" }
             Set-Content -NoNewline -LiteralPath $gclient -Value $updated
+            Get-Shallow $src $CefPins.chromium_commit
+            git -C $src checkout --quiet $CefPins.chromium_commit
             Push-Location $chromium
             try {
-              gclient sync --nohooks --no-history --verbose --revision "src@$($CefPins.chromium_commit)"
+              $fetched = 0
+              foreach ($line in (gclient revinfo)) {
+                if ($line -notmatch '^(\S+): \S+@([0-9a-f]{40})$') { continue }
+                $repo = Join-Path $chromium $Matches[1]
+                if (-not (Test-Path (Join-Path $repo '.git'))) { continue }
+                if ((git -C $repo rev-parse HEAD) -ceq $Matches[2]) { continue }
+                Get-Shallow $repo $Matches[2]
+                $fetched++
+              }
+              Write-Host "Fetched new revisions of $fetched dependencies"
+              gclient sync --nohooks --no-history --verbose
             } finally { Pop-Location }
             $head = git -C $src rev-parse HEAD
             if ($head -cne $CefPins.chromium_commit) { throw "Chromium is at $head, not $($CefPins.chromium_commit)" }
