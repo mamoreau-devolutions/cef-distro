@@ -65,6 +65,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: tauri-apps/cef-rs
           ref: 9aa78c450489eddb828eb982eaee6c104a89d348
@@ -117,3 +118,30 @@ jobs:
             test -L "$exported/Chromium Embedded Framework"
             file -Lb "$exported/Chromium Embedded Framework" | grep -iE "Mach-O 64-bit.*$expected"
           done
+      - name: Package a synthetic candidate for release
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cef-package-smoke"
+          name='cef_binary_156.0.26+g8ea0c73+chromium-156.0.8078.88_linux64_minimal'
+          root="$work/src/$name"
+          mkdir -p "$root"/{Release,Resources,cmake,include,libcef_dll} "$work/verified"
+          cp /bin/true "$root/Release/libcef.so"
+          printf 'sandbox' > "$root/Release/chrome-sandbox"
+          printf 'icu' > "$root/Resources/icudtl.dat"
+          touch "$root/CMakeLists.txt" "$root/include/cef_app.h"
+          tar -C "$work/src" -cjf "$work/verified/$name.tar.bz2" "$name"
+          jq -n --arg archive "$name.tar.bz2" '{platform: "linux", architecture: "x64", archive: $archive}' \
+            > "$work/verified/manifest-linux-x64.json"
+          bash scripts/package.sh "$work/verified" '["linux-x64"]' cef-rs "$work/release" 1700000000
+          package="cef-$(jq -r '.cef_version | split("+")[0]' pins.json)-linux-x64"
+          (cd "$work/release" && sha256sum --check SHA256SUMS)
+          tar -tzf "$work/release/$package.tar.gz" > "$work/list"
+          for entry in libcef.so chrome-sandbox icudtl.dat archive.json include/cef_app.h CMakeLists.txt; do
+            grep -qx "$package/$entry" "$work/list"
+          done
+          jq -e --arg name "$package.tar.gz" '.package.name == $name and (.package.sha256 | length) == 64' \
+            "$work/release/manifest-linux-x64.json"
+          # Packing the same candidate again gives the same bytes.
+          bash scripts/package.sh "$work/verified" '["linux-x64"]' cef-rs "$work/again" 1700000000
+          cmp "$work/release/$package.tar.gz" "$work/again/$package.tar.gz"

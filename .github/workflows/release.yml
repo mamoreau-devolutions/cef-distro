@@ -106,7 +106,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $sources = @(ConvertFrom-Json -InputObject $env:RUNS | ForEach-Object { Join-Path 'candidates' "$_" })
-          & ./scripts/publish.ps1 -Source $sources -Targets $env:TARGETS -SmokeProofs 'native-smoke' -Output 'release'
+          & ./scripts/publish.ps1 -Source $sources -Targets $env:TARGETS -SmokeProofs 'native-smoke' -Output 'verified'
       - name: Read exporter revision
         id: pins
         run: echo "cef_rs=$(jq -r .cef_rs_commit pins.json)" >> "$GITHUB_OUTPUT"
@@ -115,42 +115,12 @@ jobs:
           repository: tauri-apps/cef-rs
           ref: ${{ steps.pins.outputs.cef_rs }}
           path: cef-rs
-      - name: Smoke-test real archives with the pinned cef-rs exporter
+      # Each package is the pinned exporter's CEF_PATH directory for the verified
+      # archive, so consumers extract it and point CEF_PATH at it.
+      - name: Package candidates with the pinned cef-rs exporter
         env:
           TARGETS: ${{ needs.plan.outputs.targets }}
-        run: |
-          set -euo pipefail
-          for target in $(echo "$TARGETS" | jq -r '.[]'); do
-            case "$target" in
-              linux-x64) rust_target=x86_64-unknown-linux-gnu; library=libcef.so; expected='ELF 64-bit.*x86-64' ;;
-              linux-arm64) rust_target=aarch64-unknown-linux-gnu; library=libcef.so; expected='ELF 64-bit.*aarch64' ;;
-              windows-x64) rust_target=x86_64-pc-windows-msvc; library=libcef.dll; expected='PE32\+.*x86-64' ;;
-              windows-arm64) rust_target=aarch64-pc-windows-msvc; library=libcef.dll; expected='PE32\+.*(aarch64|arm64)' ;;
-              macos-x64) rust_target=x86_64-apple-darwin; library='Chromium Embedded Framework.framework/Chromium Embedded Framework'; expected='Mach-O 64-bit.*x86_64' ;;
-              macos-arm64) rust_target=aarch64-apple-darwin; library='Chromium Embedded Framework.framework/Chromium Embedded Framework'; expected='Mach-O 64-bit.*arm64' ;;
-              *) echo "::error::Unsupported target: $target"; exit 1 ;;
-            esac
-            archive="$GITHUB_WORKSPACE/release/$(jq -r .archive "release/manifest-$target.json")"
-            work="$RUNNER_TEMP/cef-export-smoke-$target"
-            mkdir -p "$work"
-            cargo run --quiet --manifest-path cef-rs/Cargo.toml -p export-cef-dir -- \
-              --archive "$archive" --target "$rust_target" "$work/output"
-            output="$work/output"
-            test -f "$output/$library"
-            file -Lb "$output/$library" | tee /dev/stderr | grep -iE "$expected"
-            test -f "$output/include/cef_app.h"
-            case "$target" in
-              linux-*) test -f "$output/chrome-sandbox"; test -f "$output/icudtl.dat" ;;
-              windows-*) test -f "$output/bootstrap.exe"; test -f "$output/bootstrapc.exe"; test -f "$output/icudtl.dat" ;;
-              # CEF's distribution ships a flat framework; -f also follows a versioned layout's links.
-              macos-*) test -f "$output/Chromium Embedded Framework.framework/Resources/Info.plist"
-                test -f "$output/Chromium Embedded Framework.framework/Resources/icudtl.dat" ;;
-            esac
-            sha1=$(sha1sum "$archive" | cut -d' ' -f1)
-            jq -e --arg name "$(basename "$archive")" --arg sha1 "$sha1" \
-              '.type == "minimal" and .name == $name and .sha1 == $sha1' "$output/archive.json" >/dev/null
-            rm -rf -- "$work"
-          done
+        run: bash scripts/package.sh verified "$TARGETS" cef-rs release "$(git log -1 --format=%ct)"
       - name: Publish release
         if: ${{ !inputs.dry-run }}
         env:
@@ -161,25 +131,27 @@ jobs:
         run: |
           set -euo pipefail
           version=$(jq -r .cef_version pins.json)
-          # Releases of one upstream version count up: cef-156.0.31-patched.1, .2, ...
-          # Older tags ended in a run ID; their long suffixes are not counted.
-          base="cef-${version%%+*}-patched"
-          last=$(gh release list --limit 1000 --json tagName \
-            --jq "[.[].tagName | select(startswith(\"$base.\")) | ltrimstr(\"$base.\") | select(test(\"^[0-9]{1,4}$\")) | tonumber] | max // 0")
+          upstream=${version%%+*}
+          # The first release of an upstream version is tagged v156.0.31; later
+          # releases of it (after a patch change) v156.0.31-2, -3, ...
+          base="v$upstream"
+          last=$(gh release list --limit 1000 --json tagName --jq "[.[].tagName |
+            if . == \"$base\" then 1 elif startswith(\"$base-\") then ltrimstr(\"$base-\") else empty end |
+            tostring | select(test(\"^[0-9]{1,4}$\")) | tonumber] | max // 0")
           number=$((last + 1))
-          tag="$base.$number"
+          tag=$base
+          if [ "$number" -gt 1 ]; then tag="$base-$number"; fi
           # Only a release with every supported target is a full release.
           prerelease=()
           if [ "$(echo "$TARGETS" | jq 'length')" -lt 6 ]; then prerelease=(--prerelease); fi
           links=$(echo "$RUNS" | jq -r --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs" \
             'map("[\(.)](\($url)/\(.))") | join(", ")')
           {
-            echo "Patched CEF \`$version\` built by run(s) $links; published from \`$GITHUB_SHA\`."
+            echo "CEF \`$version\` with this repository's patches, built by run(s) $links; published from \`$GITHUB_SHA\`."
             echo
-            echo "Targets: $(echo "$TARGETS" | jq -r 'join(", ")'). Each \`manifest-<target>.json\` records the repository commit, pins, and patch blobs of that build."
+            echo "Targets: $(echo "$TARGETS" | jq -r 'join(", ")'). Each \`cef-$upstream-<target>.tar.gz\` is a ready \`CEF_PATH\` for cef-rs: extract it and point \`CEF_PATH\` at the \`cef-$upstream-<target>\` directory. Each \`manifest-<target>.json\` records the repository commit, pins, patch blobs, the source distribution's SHA-256 and the package's."
             echo
-            echo "Each archive is the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef."
-            echo "CI also smoke-tested importing each archive with the pinned cef-rs exporter and checked the library architecture."
+            echo "Each package is the pinned cef-rs exporter's import of the unmodified CEF \`--minimal\` distribution produced by \`make_distrib.py\`; CI verified the patch blobs, the pinned upstream checkouts, and the 14 patched exports in libcef, and checked each package's library architecture and essential files."
             echo "Native CI loaded each library and checked the disabled-clipboard getters without initializing CEF. This is not a substitute for the IronRDP native tests."
             if ! echo "$TARGETS" | jq -e 'any(.[]; startswith("macos-"))' >/dev/null; then
               echo
@@ -192,6 +164,5 @@ jobs:
             git push origin "$GITHUB_SHA:refs/heads/master"
           fi
           gh release create "$tag" --target "$GITHUB_SHA" "${prerelease[@]}" \
-            --title "Patched CEF ${version%%+*} (release $number)" --notes-file notes.md \
-            -- release/*
+            --title "CEF ${tag#v}" --notes-file notes.md -- release/*
           echo "Published $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag"

@@ -121,12 +121,16 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
 6. The **release** workflow (`release.yml`) first checks that each patched
    library loads on a native runner. It checks every candidate's checksum and
    that its manifest carries this checkout's pins and patch blobs and matches
-   the archive actually smoke-tested, imports each archive with the pinned
-   cef-rs exporter, and checks the resulting library's architecture and
-   essential files. It then publishes a release tagged
-   `cef-<cef version>-patched.<n>`, where `n` counts the releases of that
-   upstream version from 1 (tags from before this scheme end in a run ID). A
-   release missing any of the six targets is marked as a prerelease.
+   the archive actually smoke-tested. `scripts/package.sh` imports each
+   archive with the pinned cef-rs exporter, checks the resulting library's
+   architecture and essential files, and packs that `CEF_PATH` directory as
+   `cef-<upstream version>-<target>.tar.gz` (reproducibly: sorted, owner and
+   mtime fixed). It then publishes a release tagged `v<upstream version>`,
+   such as `v156.0.31`; a later release of the same upstream version, after a
+   patch change, is tagged `v156.0.31-2`, `-3` and so on. Older releases were
+   tagged `cef-<version>-patched.<n>` and carry the original `.tar.bz2`
+   distributions. A release missing any of the six targets is marked as a
+   prerelease.
    Dispatch **Publish release** directly
    with a JSON list of run IDs to assemble targets built by different runs
    (earlier runs win). Set `dry-run` to verify without publishing, and
@@ -157,25 +161,25 @@ The directory must not already exist; it is never cleaned or reused.
 
 ## Consuming a release from a cef-rs fork
 
-Each release contains, per target, the original
-`cef_binary_<version>_<platform>_minimal.tar.bz2`, `manifest-<target>.json`
-(upstream pins, repository commit, patch identities, archive SHA-256) and a
+Each release contains, per target, `cef-<upstream version>-<target>.tar.gz`,
+`manifest-<target>.json` (upstream pins, repository commit, patch identities,
+the SHA-256 of the CEF distribution it came from and of the package) and a
 combined `SHA256SUMS`.
 
-An unpacked `binary_distrib` is **not** a cef-rs `CEF_PATH`. Download the
-archive, verify `SHA256SUMS`, keep its canonical basename, then use
-`export-cef-dir` from pinned
-[cef-rs](https://github.com/tauri-apps/cef-rs/tree/9aa78c450489eddb828eb982eaee6c104a89d348/export-cef-dir):
+Each package is a ready cef-rs `CEF_PATH`: the unmodified CEF `--minimal`
+distribution as imported by `export-cef-dir` from pinned
+[cef-rs](https://github.com/tauri-apps/cef-rs/tree/9aa78c450489eddb828eb982eaee6c104a89d348/export-cef-dir),
+with `Release`/`Resources` flattened and `archive.json` written. Verify
+`SHA256SUMS`, then:
 
 ```sh
-export-cef-dir --archive cef_binary_..._linux64_minimal.tar.bz2 \
-  --target x86_64-unknown-linux-gnu /path/per/patched/release
-export CEF_PATH=/path/per/patched/release
+tar -xzf cef-156.0.31-linux-x64.tar.gz -C /path/per/release
+export CEF_PATH=/path/per/release/cef-156.0.31-linux-x64
 ```
 
-This flattens `Release`/`Resources` and writes `archive.json`. CI smoke-tests
-the exporter with both synthetic and release archives. A cef-rs fork can
-instead download from the release URL in its build script; either way:
+CI checks the packaging with a synthetic archive on every push and the
+release archives on every release. A cef-rs fork can instead download from
+the release URL in its build script; either way:
 
 - Use a distinct `CEF_PATH` or cache directory per patched release. An invalid
   or too-new `archive.json` makes this cef-rs revision silently download
