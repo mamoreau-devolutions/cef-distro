@@ -22,7 +22,7 @@ inputs:
     default: ""
   incremental:
     description: >-
-      Linux only: instead of syncing from scratch, update the finished tree an
+      Linux and macOS: instead of syncing from scratch, update the finished tree an
       earlier build saved as its seed in place, and save this build's finished
       tree as the next build's seed
     required: false
@@ -47,7 +47,18 @@ runs:
           echo "Capping the macOS build budget at 165 of $BUDGET minutes"
           BUDGET=165
         fi
-        echo "CEF_DEADLINE=$(( $(date +%s) + BUDGET * 60 ))" >> "$GITHUB_ENV"
+        start=$(date +%s)
+        deadline=$(( start + BUDGET * 60 ))
+        echo "CEF_DEADLINE=$deadline" >> "$GITHUB_ENV"
+        # Latest time a finished build may start saving its seed. A seed save
+        # takes up to about 35 minutes on Linux, inside the 80 the six-hour job
+        # leaves after the deadline. On macOS packing alone takes about 22, so it
+        # must start by 2h40m to end before file I/O starts failing.
+        seed_by=$(( deadline + 40 * 60 ))
+        if [ "$RUNNER_OS" = macOS ] && [ "$seed_by" -gt $(( start + 160 * 60 )) ]; then
+          seed_by=$(( start + 160 * 60 ))
+        fi
+        echo "CEF_SEED_BY=$seed_by" >> "$GITHUB_ENV"
         # Every stage must use the same absolute tree path so ninja state stays valid.
         case "$RUNNER_OS" in
           Linux) tree=/home/runner/cefb; parts=/mnt/cef-parts ;;
@@ -146,7 +157,7 @@ runs:
           echo "Resuming $name from run $RESUME_RUN"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "run=$RESUME_RUN" >> "$GITHUB_OUTPUT"
-        elif [ "$INCREMENTAL" = true ] && [[ "$TARGET" == linux-* ]] && seed=$(
+        elif [ "$INCREMENTAL" = true ] && [[ "$TARGET" != windows-* ]] && seed=$(
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=seed-$TARGET&per_page=50" \
             --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .workflow_run.id // empty'
         ) && [ -n "$seed" ]; then
@@ -247,18 +258,18 @@ runs:
         retention-days: 14
         compression-level: 0
 
-    # The next Linux build updates this finished tree in place and rebuilds only
-    # what changed (about a fifth of the build for a Chromium patch release). A
-    # seed that fails to save costs that build a fresh sync, not this one.
+    # The next Linux or macOS build updates this finished tree in place and
+    # rebuilds only what changed (a fifth to a third of the build for a Chromium
+    # patch release). A seed that fails to save costs that build a fresh sync,
+    # not this one.
     - name: Save finished tree as the next build's seed
       id: seed
-      if: steps.build.outputs.complete == 'true' && inputs.incremental == 'true' && startsWith(inputs.target, 'linux-')
+      if: steps.build.outputs.complete == 'true' && inputs.incremental == 'true' && !startsWith(inputs.target, 'windows-')
       continue-on-error: true
       shell: bash
       run: |
         set -euo pipefail
-        # The deadline leaves 75 minutes of the job; saving takes up to about 35.
-        if [ "$(date +%s)" -gt $(( CEF_DEADLINE + 40 * 60 )) ]; then
+        if [ "$(date +%s)" -gt "$CEF_SEED_BY" ]; then
           echo "::warning::Too little job time left to save the seed; the next build syncs from scratch"
           exit 1
         fi

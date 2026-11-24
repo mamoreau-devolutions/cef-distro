@@ -23,7 +23,7 @@ on:
         type: string
         default: ""
       incremental:
-        description: Linux targets update the previous build's finished tree in place instead of syncing from scratch
+        description: Linux and macOS targets update the previous build's finished tree in place instead of syncing from scratch
         type: boolean
         default: true
 permissions:

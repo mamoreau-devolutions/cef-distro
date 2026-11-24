@@ -1,6 +1,6 @@
 name: Promote tree to seed
 # Makes a tree an earlier run saved (finished or not) the seed that the next
-# incremental Linux build updates in place, for when no build has saved a seed
+# incremental Linux or macOS build updates in place, for when no build has saved a seed
 # yet or the newest seed should be replaced.
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         description: Target of the saved tree
         required: true
         type: choice
-        options: [linux-x64, linux-arm64]
+        options: [linux-x64, linux-arm64, macos-x64, macos-arm64]
       run:
         description: Build run that saved the tree
         required: true
