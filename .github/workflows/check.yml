@@ -129,7 +129,7 @@ jobs:
           cp /bin/true "$root/Release/libcef.so"
           printf 'sandbox' > "$root/Release/chrome-sandbox"
           printf 'icu' > "$root/Resources/icudtl.dat"
-          touch "$root/CMakeLists.txt" "$root/include/cef_app.h"
+          touch "$root/CMakeLists.txt" "$root/CREDITS.html" "$root/include/cef_app.h"
           tar -C "$work/src" -cjf "$work/verified/$name.tar.bz2" "$name"
           jq -n --arg archive "$name.tar.bz2" '{platform: "linux", architecture: "x64", archive: $archive}' \
             > "$work/verified/manifest-linux-x64.json"
