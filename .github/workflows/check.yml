@@ -44,6 +44,12 @@ jobs:
       - name: Check source synchronization
         shell: pwsh
         run: ./tests/test_sync.ps1
+      - name: Check in-place tree update
+        shell: pwsh
+        run: ./tests/test_update.ps1
+      - name: Check checkout revert and mtime restore
+        shell: pwsh
+        run: ./tests/test_checkouts.ps1
       - name: Check Ninja interruption
         shell: pwsh
         run: ./tests/test_build.ps1

@@ -22,6 +22,10 @@ on:
         description: Earlier run ID whose newest saved trees seed stage 1 (targets without one sync from scratch)
         type: string
         default: ""
+      incremental:
+        description: Linux targets update the previous build's finished tree in place instead of syncing from scratch
+        type: boolean
+        default: true
 permissions:
   contents: read
   actions: read
@@ -58,6 +62,7 @@ jobs:
       target: ${{ matrix.target }}
       stage-minutes: ${{ inputs.stage-minutes }}
       resume-run: ${{ inputs.resume-run }}
+      incremental: ${{ inputs.incremental }}
 
   release:
     needs: [plan, build]

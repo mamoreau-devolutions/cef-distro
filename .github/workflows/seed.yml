@@ -1,0 +1,59 @@
+name: Promote tree to seed
+# Makes a tree an earlier run saved (finished or not) the seed that the next
+# incremental Linux build updates in place, for when no build has saved a seed
+# yet or the newest seed should be replaced.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Target of the saved tree
+        required: true
+        type: choice
+        options: [linux-x64, linux-arm64]
+      run:
+        description: Build run that saved the tree
+        required: true
+        type: string
+      artifact:
+        description: Exact tree artifact name, such as tree-linux-x64-1
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/seed
+          sudo chown "$(id -u):$(id -g)" /mnt/seed
+          df -h /mnt
+
+      - name: Download saved tree
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          run-id: ${{ inputs.run }}
+          github-token: ${{ github.token }}
+          path: /mnt/seed
+
+      - name: Check the tree's parts
+        working-directory: /mnt/seed
+        run: |
+          set -euo pipefail
+          test -f host-arch.txt
+          sha256sum --check --quiet tree.sha256
+          ls -la
+
+      - name: Upload seed
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: seed-${{ inputs.target }}
+          path: /mnt/seed/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

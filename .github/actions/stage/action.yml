@@ -20,6 +20,13 @@ inputs:
     description: An earlier run ID whose newest saved tree for this target replaces the sync when this run has saved none
     required: false
     default: ""
+  incremental:
+    description: >-
+      Linux only: instead of syncing from scratch, update the finished tree an
+      earlier build saved as its seed in place, and save this build's finished
+      tree as the next build's seed
+    required: false
+    default: "true"
 outputs:
   complete:
     description: Whether every build target finished in this stage
@@ -121,6 +128,7 @@ runs:
         RESUME_RUN: ${{ inputs.resume-run }}
         TARGET: ${{ inputs.target }}
         STAGE: ${{ inputs.stage }}
+        INCREMENTAL: ${{ inputs.incremental }}
       run: |
         set -euo pipefail
         # The newest tree, not the previous stage's: after a stage fails or loses
@@ -138,19 +146,23 @@ runs:
           echo "Resuming $name from run $RESUME_RUN"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "run=$RESUME_RUN" >> "$GITHUB_OUTPUT"
+        elif [ "$INCREMENTAL" = true ] && [[ "$TARGET" == linux-* ]] && seed=$(
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=seed-$TARGET&per_page=50" \
+            --jq '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .workflow_run.id // empty'
+        ) && [ -n "$seed" ]; then
+          echo "::notice::Updating the finished $TARGET tree of run $seed in place"
+          echo "name=seed-$TARGET" >> "$GITHUB_OUTPUT"
+          echo "run=$seed" >> "$GITHUB_OUTPUT"
+          echo "seed=true" >> "$GITHUB_OUTPUT"
         elif [ "$STAGE" != 1 ] || [ -n "$RESUME_RUN" ]; then
           echo "::notice::No saved $TARGET tree to resume; syncing from scratch"
         fi
 
-    - name: Sync, patch, and generate build files
-      if: steps.source.outputs.name == ''
-      shell: pwsh
-      env:
-        TARGET: ${{ inputs.target }}
-      run: ./scripts/sync.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
-
+    # A seed that fails to download, restore or update falls back to a fresh sync.
     - name: Download previous tree
+      id: download
       if: steps.source.outputs.name != ''
+      continue-on-error: ${{ steps.source.outputs.seed == 'true' }}
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: ${{ steps.source.outputs.name }}
@@ -159,7 +171,9 @@ runs:
         path: ${{ env.CEF_PARTS }}/in
 
     - name: Restore previous tree
-      if: steps.source.outputs.name != ''
+      id: restore
+      if: steps.source.outputs.name != '' && steps.download.outcome == 'success'
+      continue-on-error: ${{ steps.source.outputs.seed == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
@@ -172,6 +186,34 @@ runs:
           exit 1
         fi
         pwsh -NoProfile -File scripts/tree.ps1 -Mode unpack -Parts "$CEF_PARTS/in" -Directory "$CEF_TREE"
+
+    - name: Update the seed tree in place
+      id: update
+      if: steps.source.outputs.seed == 'true' && steps.restore.outcome == 'success'
+      continue-on-error: true
+      shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        # In a child process: update.ps1 changes the environment it runs in.
+        pwsh -NoProfile -File ./scripts/update.ps1 -Directory $env:CEF_TREE -Target $env:TARGET `
+          -Record (Join-Path $env:RUNNER_TEMP 'cef-update-reverted.json')
+        if ($LASTEXITCODE -ne 0) { throw "Updating the seed tree failed: $LASTEXITCODE" }
+
+    - name: Sync, patch, and generate build files
+      if: steps.source.outputs.name == '' || (steps.source.outputs.seed == 'true' && steps.update.outcome != 'success')
+      shell: pwsh
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (Test-Path -LiteralPath $env:CEF_TREE) {
+          Write-Host '::warning::The seed tree could not be updated in place; syncing from scratch'
+          Remove-Item -LiteralPath $env:CEF_TREE -Recurse -Force
+        }
+        $parts = Join-Path $env:CEF_PARTS 'in'
+        if (Test-Path -LiteralPath $parts) { Remove-Item -LiteralPath $parts -Recurse -Force }
+        ./scripts/sync.ps1 -Directory $env:CEF_TREE -Target $env:TARGET
 
     - name: Build until deadline
       id: build
@@ -203,6 +245,38 @@ runs:
         path: ${{ runner.temp }}/candidate/*
         if-no-files-found: error
         retention-days: 14
+        compression-level: 0
+
+    # The next Linux build updates this finished tree in place and rebuilds only
+    # what changed (about a fifth of the build for a Chromium patch release). A
+    # seed that fails to save costs that build a fresh sync, not this one.
+    - name: Save finished tree as the next build's seed
+      id: seed
+      if: steps.build.outputs.complete == 'true' && inputs.incremental == 'true' && startsWith(inputs.target, 'linux-')
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The deadline leaves 75 minutes of the job; saving takes up to about 35.
+        if [ "$(date +%s)" -gt $(( CEF_DEADLINE + 40 * 60 )) ]; then
+          echo "::warning::Too little job time left to save the seed; the next build syncs from scratch"
+          exit 1
+        fi
+        rm -rf "$CEF_TREE/chromium/src/cef/binary_distrib" "$CEF_PARTS/in" "$CEF_PARTS/seed"
+        df -h "$CEF_TREE" "$CEF_PARTS" || true
+        pwsh -NoProfile -File scripts/tree.ps1 -Mode pack -Directory "$CEF_TREE" -Output "$CEF_PARTS/seed"
+        uname -m > "$CEF_PARTS/seed/host-arch.txt"
+        ls -la "$CEF_PARTS/seed"
+
+    - name: Upload seed
+      if: steps.seed.outcome == 'success'
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: seed-${{ inputs.target }}
+        path: ${{ env.CEF_PARTS }}/seed/*
+        if-no-files-found: error
+        retention-days: 30
         compression-level: 0
 
     # A finished build whose distribution fails keeps its tree, so a retry stage

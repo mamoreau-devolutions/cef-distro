@@ -51,20 +51,7 @@ foreach ($checkout in @(
         throw "Unexpected $($checkout.Name) checkout: $head"
     }
 }
-$trees = @(
-    @{ Path = $cef; Patches = @('isolated-clipboard.patch', 'remote-devices-cef.patch') }
-    @{ Path = $src; Patches = @('remote-devices-chromium.patch', 'in-process-audio-shutdown.patch') }
-)
-if (-not $IsWindows) { $trees[1].Patches += 'disable-chromium-shutdown-signals.patch' }
-foreach ($tree in $trees) {
-    foreach ($name in $tree.Patches) {
-        $patch = Join-Path $CefRoot 'patches' $name
-        & git -C $tree.Path apply --check $patch
-        if ($LASTEXITCODE -ne 0) { throw "Patch check failed: $name" }
-        & git -C $tree.Path apply $patch
-        if ($LASTEXITCODE -ne 0) { throw "Patch application failed: $name" }
-    }
-}
+Install-DistroPatches $src $cef
 Push-Location $cef
 try {
     & python tools/gclient_hook.py

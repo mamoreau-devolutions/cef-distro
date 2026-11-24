@@ -1,9 +1,8 @@
 name: Probe incremental update
-# Restores a tree saved by an earlier version's build, moves its checkouts to
-# the versions in pins.json in place, and counts what ninja would rebuild. Each
-# patched file whose content does not change keeps its old mtime, as an
-# incremental build would have to arrange. Nothing is built or uploaded except
-# the probe's records.
+# Restores a tree saved by an earlier version's build, moves it to the versions
+# in pins.json with scripts/update.ps1 as an incremental build does, runs the
+# dirty generators, and counts what ninja would rebuild. Nothing is built or
+# uploaded except the probe's records.
 on:
   workflow_dispatch:
     inputs:
@@ -20,14 +19,6 @@ on:
         description: Exact tree artifact name, such as tree-macos-x64-1
         required: true
         type: string
-      salt:
-        description: >-
-          Mojom message ID salt: version keeps the default (chrome/VERSION); fixed
-          reads it from a file that keeps the saved tree's VERSION text
-        required: false
-        default: version
-        type: choice
-        options: [version, fixed]
 permissions:
   contents: read
   actions: read
@@ -110,120 +101,29 @@ jobs:
           TARGET: ${{ inputs.target }}
           SOURCE_RUN: ${{ inputs.run }}
           SOURCE_ARTIFACT: ${{ inputs.artifact }}
-          PROBE_SALT: ${{ inputs.salt }}
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           . ./scripts/candidate.ps1
-          . ./scripts/build-env.ps1
           $tree = $env:CEF_TREE
-          # Set-CefBuildEnvironment removes TARGET, which Chromium's bindgen rejects.
           $target = $env:TARGET
-          Set-CefBuildEnvironment $tree $target
           function Probe([string]$Phase) {
             python scripts/incremental-probe.py $Phase --tree $tree --target $target --state $env:PROBE
           }
-          $chromium = Join-Path $tree 'chromium'
-          $src = Join-Path $chromium 'src'
-          $cef = Join-Path $src 'cef'
-          function Step([string]$Name, [scriptblock]$Action) {
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            Write-Host "::group::$Name"
-            try { & $Action } finally { Write-Host '::endgroup::'; Write-Host ("{0}: {1:N1} min" -f $Name, $watch.Elapsed.TotalMinutes) }
-          }
-
-          Step 'Count steps pending in the saved tree' { Probe baseline }
-          Write-Host "Saved tree: CEF $(git -C $cef rev-parse HEAD), Chromium $(git -C $src rev-parse HEAD)"
-          Step 'Record and revert local changes' { Probe revert }
-          # The saved outputs were generated with this VERSION text as the salt.
-          $versionFile = Get-Item (Join-Path $src 'chrome' 'VERSION')
-          $savedVersion = [IO.File]::ReadAllBytes($versionFile.FullName)
-          $savedVersionTime = $versionFile.LastWriteTimeUtc
-          Step 'Move CEF' {
-            git -C $cef fetch --quiet origin
-            git -C $cef checkout --quiet $CefPins.cef_commit
-          }
-          # gclient fetches a checkout's whole history whenever its pinned revision is
-          # missing, which a shallow Chromium checkout cannot take, so each revision is
-          # fetched alone first and gclient finds them all present.
-          function Get-Shallow([string]$Repo, [string]$Revision) {
-            $PSNativeCommandUseErrorActionPreference = $false
-            $present = git -C $Repo cat-file -t "$Revision^{commit}" 2>$null
-            $PSNativeCommandUseErrorActionPreference = $true
-            if ($present -ne 'commit') {
-              git -C $Repo fetch --quiet --depth=1 --no-tags origin $Revision
-            }
-          }
-          Step 'Move Chromium and its dependencies' {
-            $gclient = Join-Path $chromium '.gclient'
-            $spec = Get-Content -Raw $gclient
-            $updated = $spec -replace '(chromium/src\.git@)[0-9a-f.]+', "`${1}$($CefPins.chromium_commit)"
-            if ($updated -ceq $spec) { throw "No Chromium version found in .gclient: $spec" }
-            Set-Content -NoNewline -LiteralPath $gclient -Value $updated
-            Get-Shallow $src $CefPins.chromium_commit
-            git -C $src checkout --quiet $CefPins.chromium_commit
-            Push-Location $chromium
-            try {
-              $fetched = 0
-              foreach ($line in (gclient revinfo)) {
-                if ($line -notmatch '^(\S+): \S+@([0-9a-f]{40})$') { continue }
-                $repo = Join-Path $chromium $Matches[1]
-                if (-not (Test-Path (Join-Path $repo '.git'))) { continue }
-                if ((git -C $repo rev-parse HEAD) -ceq $Matches[2]) { continue }
-                Get-Shallow $repo $Matches[2]
-                $fetched++
-              }
-              Write-Host "Fetched new revisions of $fetched dependencies"
-              gclient sync --nohooks --no-history --verbose
-            } finally { Pop-Location }
-            $head = git -C $src rev-parse HEAD
-            if ($head -cne $CefPins.chromium_commit) { throw "Chromium is at $head, not $($CefPins.chromium_commit)" }
-            # A dependency whose revision changed must have moved too.
-            $v8 = [regex]::Match((Get-Content -Raw (Join-Path $src 'DEPS')), "'v8_revision':\s*'([0-9a-f]{40})'").Groups[1].Value
-            $v8Head = git -C (Join-Path $src 'v8') rev-parse HEAD
-            if ($v8Head -cne $v8) { throw "V8 is at $v8Head, not $v8 from DEPS" }
-          }
-          Step 'Run hooks' {
-            Push-Location $src
-            try {
-              python (Join-Path $cef 'tools' 'patcher.py') --patch-file (Join-Path $cef 'patch' 'patches' 'runhooks') --patch-dir $src
-              Push-Location $chromium
-              try { gclient runhooks } finally { Pop-Location }
-            } finally { Pop-Location }
-          }
-          Step 'Apply patches' {
-            Push-Location $cef
-            try { python tools/patch_updater.py } finally { Pop-Location }
-            $trees = @(
-              @{ Path = $cef; Patches = @('isolated-clipboard.patch', 'remote-devices-cef.patch') }
-              @{ Path = $src; Patches = @('remote-devices-chromium.patch', 'in-process-audio-shutdown.patch') }
-            )
-            if (-not $IsWindows) { $trees[1].Patches += 'disable-chromium-shutdown-signals.patch' }
-            foreach ($patchTree in $trees) {
-              foreach ($name in $patchTree.Patches) { git -C $patchTree.Path apply (Join-Path $CefRoot 'patches' $name) }
-            }
-          }
-          Step 'Restore mtimes of unchanged files' { Probe restore }
-          if ($env:PROBE_SALT -eq 'fixed') {
-            # As if the saved tree had been built with a fixed salt file all along:
-            # same text and mtime as the VERSION it was salted with.
-            $salt = Join-Path $src 'build' 'mojom_message_id_salt'
-            [IO.File]::WriteAllBytes($salt, $savedVersion)
-            (Get-Item $salt).LastWriteTimeUtc = $savedVersionTime
-            $env:GN_DEFINES += ' mojom_message_id_salt_path="//build/mojom_message_id_salt"'
-          }
-          Write-Host "GN_DEFINES: $env:GN_DEFINES"
-          Step 'Generate build files' {
-            Push-Location $cef
-            try { python tools/gclient_hook.py } finally { Pop-Location }
-          }
-          Step 'Run the dirty generators' { Probe generate }
-          Step 'Count steps after the update' { Probe count }
+          New-Item -ItemType Directory -Force -Path $env:PROBE | Out-Null
+          Probe baseline
+          # In a child process: update.ps1 changes the environment it runs in.
+          pwsh -NoProfile -File scripts/update.ps1 -Directory $tree -Target $target `
+            -Record (Join-Path $env:PROBE 'modified.json')
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          Probe generate
+          Write-Host ('Run the dirty generators: {0:N1} min' -f $watch.Elapsed.TotalMinutes)
+          Probe count
           $summary = Get-Content -Raw (Join-Path $env:PROBE 'summary.json') | ConvertFrom-Json
           @(
             "### Incremental update probe: $target"
             ''
-            "From ``$env:SOURCE_ARTIFACT`` of run $env:SOURCE_RUN to CEF $($CefPins.cef_version), mojom salt: $env:PROBE_SALT."
+            "From ``$env:SOURCE_ARTIFACT`` of run $env:SOURCE_RUN to CEF $($CefPins.cef_version)."
             ''
             "| Steps | Count |"
             "|---|---|"
@@ -237,7 +137,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: incremental-probe-${{ inputs.target }}-${{ inputs.salt }}
+          name: incremental-probe-${{ inputs.target }}
           path: ${{ env.PROBE }}/*
           if-no-files-found: warn
           retention-days: 14

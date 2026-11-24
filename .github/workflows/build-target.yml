@@ -12,6 +12,9 @@ on:
       resume-run:
         type: string
         default: ""
+      incremental:
+        type: boolean
+        default: true
 permissions:
   contents: read
   actions: read
@@ -31,6 +34,7 @@ jobs:
           stage: "1"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s2:
     name: stage 2
     needs: [s1]
@@ -48,6 +52,7 @@ jobs:
           stage: "2"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s3:
     name: stage 3
     needs: [s2, s1]
@@ -65,6 +70,7 @@ jobs:
           stage: "3"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s4:
     name: stage 4
     needs: [s3, s2, s1]
@@ -82,6 +88,7 @@ jobs:
           stage: "4"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s5:
     name: stage 5
     needs: [s4, s3, s2]
@@ -99,6 +106,7 @@ jobs:
           stage: "5"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s6:
     name: stage 6
     needs: [s5, s4, s3]
@@ -116,6 +124,7 @@ jobs:
           stage: "6"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s7:
     name: stage 7
     needs: [s6, s5, s4]
@@ -133,6 +142,7 @@ jobs:
           stage: "7"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s8:
     name: stage 8
     needs: [s7, s6, s5]
@@ -150,6 +160,7 @@ jobs:
           stage: "8"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s9:
     name: stage 9
     needs: [s8, s7, s6]
@@ -167,6 +178,7 @@ jobs:
           stage: "9"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s10:
     name: stage 10
     needs: [s9, s8, s7]
@@ -184,6 +196,7 @@ jobs:
           stage: "10"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s11:
     name: stage 11
     needs: [s10, s9, s8]
@@ -201,6 +214,7 @@ jobs:
           stage: "11"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s12:
     name: stage 12
     needs: [s11, s10, s9]
@@ -218,6 +232,7 @@ jobs:
           stage: "12"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s13:
     name: stage 13
     needs: [s12, s11, s10]
@@ -235,6 +250,7 @@ jobs:
           stage: "13"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s14:
     name: stage 14
     needs: [s13, s12, s11]
@@ -252,6 +268,7 @@ jobs:
           stage: "14"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s15:
     name: stage 15
     needs: [s14, s13, s12]
@@ -269,6 +286,7 @@ jobs:
           stage: "15"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   s16:
     name: stage 16
     needs: [s15, s14, s13]
@@ -286,6 +304,7 @@ jobs:
           stage: "16"
           budget-minutes: ${{ inputs.stage-minutes }}
           resume-run: ${{ inputs.resume-run }}
+          incremental: ${{ inputs.incremental }}
   verdict:
     needs: [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15, s16]
     if: ${{ always() }}

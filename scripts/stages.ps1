@@ -19,6 +19,9 @@ $lines.AddRange([string[]]@(
     '      resume-run:',
     '        type: string',
     '        default: ""',
+    '      incremental:',
+    '        type: boolean',
+    '        default: true',
     'permissions:',
     '  contents: read',
     '  actions: read',
@@ -53,7 +56,8 @@ foreach ($stage in 1..16) {
         '          target: ${{ inputs.target }}',
         "          stage: `"$stage`"",
         '          budget-minutes: ${{ inputs.stage-minutes }}',
-        '          resume-run: ${{ inputs.resume-run }}'
+        '          resume-run: ${{ inputs.resume-run }}',
+        '          incremental: ${{ inputs.incremental }}'
     ))
 }
 $needs = (1..16 | ForEach-Object { "s$_" }) -join ', '
