@@ -14,13 +14,14 @@ $zstd = if ($zstdCommand) { $zstdCommand.Source } elseif (Test-Path -LiteralPath
 } else { throw 'zstd executable not found' }
 $tar = (Get-Command tar -CommandType Application | Select-Object -First 1).Source
 
-function Start-StreamProcess([string]$Executable, [string[]]$Arguments, [bool]$InputStream, [bool]$OutputStream) {
+function Start-StreamProcess([string]$Executable, [string[]]$Arguments, [bool]$InputStream, [bool]$OutputStream, [bool]$ErrorStream = $false) {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
     foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
     $start.UseShellExecute = $false
     $start.RedirectStandardInput = $InputStream
     $start.RedirectStandardOutput = $OutputStream
+    $start.RedirectStandardError = $ErrorStream
     return [Diagnostics.Process]::Start($start)
 }
 
@@ -30,6 +31,7 @@ function Get-TreeParts([string]$Path) {
     @(Get-ChildItem -LiteralPath $Path -Filter 'tree.tar.zst.*' -File | Sort-Object Name)
 }
 
+# Returns why the parts cannot be trusted, or nothing.
 function Write-TreeParts([string]$Directory, [string]$Output) {
     New-Item -ItemType Directory -Path $Output | Out-Null
     $compress = Start-StreamProcess $zstd @('-q', '-T0', '-3', '-c') $true $true
@@ -77,6 +79,7 @@ function Write-TreeParts([string]$Directory, [string]$Output) {
         return $sums.ToArray()
     }
     $tarProcess = $null
+    $problem = $null
     try {
         if ($IsWindows) {
             Write-CefWindowsTree $Directory $compress.StandardInput.BaseStream
@@ -84,16 +87,26 @@ function Write-TreeParts([string]$Directory, [string]$Output) {
             # macOS bsdtar probes every file for holes, and lseek(SEEK_HOLE) has
             # failed on build outputs there; build trees have no sparse files to keep.
             $format = if ($IsLinux) { @('--format=posix') } else { @('--format', 'pax', '--no-read-sparse') }
-            $tarProcess = Start-StreamProcess $tar (@($format) + @('-cf', '-', '-C', $Directory, '.')) $false $true
+            $tarProcess = Start-StreamProcess $tar (@($format) + @('-cf', '-', '-C', $Directory, '.')) $false $true $true
+            $messages = $tarProcess.StandardError.ReadToEndAsync()
             $tarProcess.StandardOutput.BaseStream.CopyTo($compress.StandardInput.BaseStream)
             $tarProcess.WaitForExit()
+            $messages = $messages.GetAwaiter().GetResult()
+            if ($messages) { [Console]::Error.Write($messages) }
             if ($tarProcess.ExitCode -ne 0) { throw "Tree tar failed: $($tarProcess.ExitCode)" }
+            # On a hosted macOS runner whose file I/O has started failing, bsdtar
+            # reports entries it could not read (garbled names, "File removed
+            # before we read it") and still exits 0, leaving them out of the tree.
+            if (-not $IsLinux -and $messages.Trim()) {
+                $problem = "tar reported $($messages.Trim().Split("`n").Count) unreadable entries"
+            }
         }
         $compress.StandardInput.Close()
         $sums = @(Receive-Job -Job $split -Wait -ErrorAction Stop)
         $compress.WaitForExit()
         if ($compress.ExitCode -ne 0 -or $sums.Count -lt 1) { throw "Tree compression failed: $($compress.ExitCode)" }
         [IO.File]::WriteAllText((Join-Path $Output $checksumName), ($sums -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+        return $problem
     } finally {
         if (-not $compress.HasExited) { $compress.Kill($true); $compress.WaitForExit() }
         if ($tarProcess -and -not $tarProcess.HasExited) { $tarProcess.Kill($true); $tarProcess.WaitForExit() }
@@ -150,8 +163,8 @@ if ($Mode -eq 'pack') {
     if (Test-Path -LiteralPath $Output) { throw "Pack output already exists: $Output" }
     $Output = [IO.Path]::GetFullPath($Output)
     for ($attempt = 1; ; $attempt++) {
-        Write-TreeParts $Directory $Output
-        $problem = Test-TreeChecksums $Output
+        $problem = Write-TreeParts $Directory $Output
+        if (-not $problem) { $problem = Test-TreeChecksums $Output }
         if (-not $problem -and -not (Test-TreeStream $Output)) { $problem = 'the stored parts do not decompress' }
         if (-not $problem) { break }
         if ($attempt -ge 2) { throw "Packed tree failed verification twice: $problem" }

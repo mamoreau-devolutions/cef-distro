@@ -76,6 +76,21 @@ try {
     $whole = Join-Path $temp 'whole-parts'
     & $tree -Mode pack -Directory $source -Output $whole
     if (@(Get-ChildItem -LiteralPath $whole -Filter 'tree.tar.zst.*' -File).Count -ne 1) { throw 'Default part size did not produce one part' }
+    if ($IsMacOS) {
+        # bsdtar exits 0 after entries it could not read; such a pack is not kept.
+        $fakeBin = Join-Path $temp 'fake-bin'
+        New-Item -ItemType Directory -Path $fakeBin | Out-Null
+        $fakeTar = Join-Path $fakeBin 'tar'
+        [IO.File]::WriteAllText($fakeTar, "#!/bin/sh`necho 'tar: ./out/x: File removed before we read it' >&2`nexec /usr/bin/tar `"`$@`"`n")
+        & chmod +x $fakeTar
+        $path = $env:PATH
+        $env:PATH = "$fakeBin$([IO.Path]::PathSeparator)$path"
+        $rejected = $false
+        try { & $tree -Mode pack -Directory $source -Output (Join-Path $temp 'unreadable-parts') }
+        catch { $rejected = "$_" -ceq 'Packed tree failed verification twice: tar reported 1 unreadable entries' }
+        finally { $env:PATH = $path }
+        if (-not $rejected) { throw 'A pack with unreadable entries was kept' }
+    }
     Write-Host 'PowerShell compressed tree round-trip checks passed.'
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force

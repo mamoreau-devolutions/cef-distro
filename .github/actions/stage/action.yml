@@ -29,8 +29,8 @@ inputs:
     default: "true"
 outputs:
   complete:
-    description: Whether every build target finished in this stage
-    value: ${{ steps.build.outputs.complete }}
+    description: Whether every build target finished in this stage or an earlier one
+    value: ${{ steps.finished.outputs.candidate == 'true' || steps.build.outputs.complete }}
 runs:
   using: composite
   steps:
@@ -68,8 +68,26 @@ runs:
         echo "CEF_TREE=$tree" >> "$GITHUB_ENV"
         echo "CEF_PARTS=$parts" >> "$GITHUB_ENV"
 
+    # A finished build uploads its candidate before saving its seed. When the
+    # runner is lost after that (hosted macOS runners are, under heavy file I/O),
+    # the retry stage keeps that candidate instead of building again.
+    - name: Check for a finished build
+      id: finished
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        found=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+          --jq ".artifacts[] | select(.expired | not) | select(.name == \"candidate-$TARGET\") | .id")
+        if [ -n "$found" ]; then
+          echo "::notice::An earlier stage of this run finished the $TARGET build and uploaded its candidate"
+          echo "candidate=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Free disk space (Linux)
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && steps.finished.outputs.candidate != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -82,7 +100,7 @@ runs:
         df -h / /mnt
 
     - name: Select Xcode and free disk space (macOS)
-      if: runner.os == 'macOS'
+      if: runner.os == 'macOS' && steps.finished.outputs.candidate != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -104,7 +122,7 @@ runs:
         df -h /
 
     - name: Prepare Windows toolchain
-      if: runner.os == 'Windows'
+      if: runner.os == 'Windows' && steps.finished.outputs.candidate != 'true'
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
@@ -128,11 +146,13 @@ runs:
         Get-PSDrive C, D | Format-Table -AutoSize
 
     - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      if: steps.finished.outputs.candidate != 'true'
       with:
         python-version: "3.12"
 
     - name: Find tree to resume
       id: source
+      if: steps.finished.outputs.candidate != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -212,7 +232,9 @@ runs:
         if ($LASTEXITCODE -ne 0) { throw "Updating the seed tree failed: $LASTEXITCODE" }
 
     - name: Sync, patch, and generate build files
-      if: steps.source.outputs.name == '' || (steps.source.outputs.seed == 'true' && steps.update.outcome != 'success')
+      if: >-
+        steps.finished.outputs.candidate != 'true' && (steps.source.outputs.name == '' ||
+        (steps.source.outputs.seed == 'true' && steps.update.outcome != 'success'))
       shell: pwsh
       env:
         TARGET: ${{ inputs.target }}
@@ -228,6 +250,7 @@ runs:
 
     - name: Build until deadline
       id: build
+      if: steps.finished.outputs.candidate != 'true'
       shell: pwsh
       env:
         TARGET: ${{ inputs.target }}

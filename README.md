@@ -88,7 +88,9 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    trees); the next stage restores them at the same
    absolute path and ninja resumes. Saving records each part's SHA-256 in
    `tree.sha256` and decodes the stored parts, packing once more if they are
-   corrupt; restoring checks those hashes before extracting anything.
+   corrupt; restoring checks those hashes before extracting anything. On
+   macOS a pack is also redone when `tar` reports entries it could not read,
+   which happens once a hosted runner's file I/O starts failing.
    Each stage restores the newest tree its run has saved, so when a stage fails
    or its runner is lost, the next stage retries from the last good tree. Three
    failed stages in a row stop the target. A retried target's job still shows
@@ -102,7 +104,8 @@ into `build-target.yml` (regenerate with `pwsh scripts/stages.ps1`):
    days) for the next build, unless the job has too little time left: 40
    minutes past the deadline on Linux, and 2h40m into the job on macOS,
    where packing the tree takes about 22 minutes and file I/O fails after
-   about 3h15m.
+   about 3h15m. A runner lost while saving the seed does not cost the build:
+   the retry stage finds the candidate already uploaded and stops there.
 5. **Incremental Linux and macOS builds**: when a Linux or macOS stage would
    otherwise sync from scratch and a seed exists, it restores the newest seed
    instead and moves it to the pins in place with `scripts/update.ps1`,
